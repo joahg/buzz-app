@@ -24,6 +24,10 @@ export type ChannelFacts = Readonly<{
 export type AgentReads = Readonly<{
   /** The community these reads are of; it changes when the agent's does. */
   scope: string;
+  /** The connection these reads go through. A new one, even to the same
+   * community, may read as someone else, so nothing read through an old one
+   * carries over. */
+  connection: object;
   /** The channel as the community lists it, or undefined when unknown. */
   channel(id: string): Promise<ChannelFacts | undefined>;
   read(
@@ -60,6 +64,7 @@ export function ownerReads(
   const { session } = snapshot;
   return Object.freeze({
     scope: snapshot.scope ?? "",
+    connection: session,
     channel: async (id: string) => {
       const summary =
         session.channels.list().channels.find((item) => item.id === id) ??

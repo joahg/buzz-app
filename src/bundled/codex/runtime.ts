@@ -121,9 +121,6 @@ function textOf(event: EventData, name: string) {
   if (text.startsWith(`@${name}`)) text = text.slice(name.length + 1).trim();
   return text;
 }
-/** Where a turn's shared memory read is kept: per community and agent. */
-const memoryKey = (scope: string, pubkey: string) =>
-  JSON.stringify([scope, pubkey]);
 async function abortable<T>(promise: Promise<T>, signal: AbortSignal) {
   signal.throwIfAborted();
   return new Promise<T>((resolve, reject) => {
@@ -153,8 +150,11 @@ export class CodexRuntime {
   private listeners = new Set<() => void>();
   /** Read-only model discovery, kept per agent until its settings change. */
   private previews = new Map<string, { key: string; ready: Promise<Models> }>();
-  /** One memory read per community and agent; concurrent turns share it. */
-  private memoryReads = new Map<string, Promise<MemoryListing>>();
+  /** One memory read per connection and agent; concurrent turns share it. */
+  private memoryReads = new WeakMap<
+    object,
+    Map<string, Promise<MemoryListing>>
+  >();
   constructor(
     private readonly spawn: Spawn,
     /** What each agent's turns read of its community, while it can be read. */
@@ -702,7 +702,9 @@ export class CodexRuntime {
         return entries;
       },
       remembered: () => {
-        this.memoryReads.delete(memoryKey(request.scope, request.agent.pubkey));
+        const reads = this.reads(request.agent.pubkey);
+        if (reads)
+          this.memoryReads.get(reads.connection)?.delete(request.agent.pubkey);
       },
     });
     const reply = await callTool(
@@ -737,20 +739,26 @@ export class CodexRuntime {
     const reads = this.reads(pubkey);
     if (reads?.scope !== request.scope)
       throw new Error("Buzz is not connected to this community");
-    const key = memoryKey(request.scope, pubkey);
-    let read = this.memoryReads.get(key);
+    const { connection } = reads;
+    let shared = this.memoryReads.get(connection);
+    if (!shared) {
+      shared = new Map();
+      this.memoryReads.set(connection, shared);
+    }
+    let read = shared.get(pubkey);
     if (!read) {
       const started = reads.memoryListing(AbortSignal.timeout(10000));
       const settled = () => {
-        if (this.memoryReads.get(key) === started) this.memoryReads.delete(key);
+        if (shared.get(pubkey) === started) shared.delete(pubkey);
       };
       void started.then(settled, settled);
-      this.memoryReads.set(key, started);
+      shared.set(pubkey, started);
       read = started;
     }
     const listing = await abortable(read, signal);
     signal.throwIfAborted();
-    if (this.reads(pubkey)?.scope !== request.scope)
+    const current = this.reads(pubkey);
+    if (current?.scope !== request.scope || current.connection !== connection)
       throw new Error("Buzz is not connected to this community");
     return listing;
   }
