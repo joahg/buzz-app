@@ -466,6 +466,9 @@ export class CodexRuntime {
     if (!channelId) throw new Error("The event has no unambiguous channel");
     const settings = this.resolveConfig(delivery.config);
     const channel = await reads.channel(channelId);
+    // A stop during the read deleted this agent's entry; recreating it would
+    // reopen the agent.
+    delivery.signal.throwIfAborted();
     const toolRoot = channel?.dm ? undefined : rootOf(trigger.event);
     const root = settings.scope === "channel" ? undefined : toolRoot;
     let finishActivity!: (result: WorkOutcome) => void;
