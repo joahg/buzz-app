@@ -193,6 +193,8 @@ it("shares plugin login with Settings and hosted Agents, replays failed setup wr
         agent_id: hosted ? "hosted" : "browser",
         agent_pubkey: hosted ? hostedKey : browserKey,
       };
+    } else if (url.endsWith("/nostr-identities/current")) {
+      result = { identity: { pubkey_hex: community.viewer } };
     } else if (url.endsWith("/attest-agent")) {
       result = { status: 1 };
     } else if (url.endsWith("/update-agent")) {
@@ -245,8 +247,15 @@ it("shares plugin login with Settings and hosted Agents, replays failed setup wr
     expect(native.invoke).toHaveBeenCalledWith("oauth_callback_wait", {
       id: "native-attempt-id",
     });
+    // Sign-in also checks the account's linked Buzz identity.
+    await waitFor(() =>
+      expect(
+        hostRequests()
+          .map((input) => input.request.url.split("/").at(-1))
+          .sort(),
+      ).toEqual(["current", "exchange", "list-agents", "me"]),
+    );
     const requests = hostRequests();
-    expect(requests).toHaveLength(3);
     expect(
       requests.every(
         (input) =>

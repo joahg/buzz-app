@@ -342,7 +342,7 @@ fn parse_challenge(value: serde_json::Value) -> BuilderlabChallenge {
 #[test]
 fn builderlab_binding_signs_the_reference_kind_24243_shape() {
     let template = parse_challenge(builderlab_challenge())
-        .template(1_700_000_000)
+        .template(1_700_000_000, "")
         .unwrap();
     let event: Event = serde_json::from_value(fixture().sign(template).unwrap()).unwrap();
     event.verify().unwrap();
@@ -384,7 +384,10 @@ fn builderlab_binding_rejects_invalid_or_foreign_challenges() {
         let mut challenge = builderlab_challenge();
         challenge[field] = value.into();
         assert_eq!(
-            parse_challenge(challenge).template(now).err().as_deref(),
+            parse_challenge(challenge)
+                .template(now, "")
+                .err()
+                .as_deref(),
             Some("Invalid Nostr identity challenge"),
             "{field}={value}"
         );
@@ -392,6 +395,40 @@ fn builderlab_binding_rejects_invalid_or_foreign_challenges() {
     let mut extra = builderlab_challenge();
     extra["kind"] = 1.into();
     assert!(serde_json::from_value::<BuilderlabChallenge>(extra).is_err());
+}
+
+#[test]
+fn builderlab_binding_accepts_only_production_or_the_configured_origin() {
+    let now = 1_700_000_000;
+    let staging = "https://test.blockstaging.build";
+    let with_origin = |origin: &str| {
+        let mut challenge = builderlab_challenge();
+        challenge["origin"] = origin.into();
+        parse_challenge(challenge)
+    };
+    let template = with_origin(staging).template(now, staging).unwrap();
+    assert!(template
+        .tags
+        .contains(&vec!["origin".to_owned(), staging.to_owned()]));
+    assert!(with_origin("https://app.builderlab.xyz")
+        .template(now, staging)
+        .is_ok());
+    for (origin, configured) in [
+        (staging, ""),
+        ("https://example.com", staging),
+        ("https://test.blockstaging.build/", staging),
+        ("https://test.blockstaging.build:8443", staging),
+        ("", ""),
+    ] {
+        assert_eq!(
+            with_origin(origin)
+                .template(now, configured)
+                .err()
+                .as_deref(),
+            Some("Invalid Nostr identity challenge"),
+            "{origin} with {configured:?}"
+        );
+    }
 }
 
 #[test]

@@ -29,6 +29,18 @@ export const apply: PluginModule["apply"] = (ctx) => {
   ctx.effect(() => () => session.dispose());
   const agents = createAgentClient(ctx.host, session);
   if (!unavailable) ctx.agents.register(builderlabType(agents, session));
+  // Link the Buzz key at sign-in. Best effort: activation links again and
+  // reports why when it cannot.
+  let linked: unknown;
+  ctx.effect(() =>
+    session.subscribe(() => {
+      if (session.snapshot().status !== "signed-in") return;
+      const credential = session.credential();
+      if (linked === credential) return;
+      linked = credential;
+      void agents.link(new AbortController().signal).catch(() => {});
+    }),
+  );
   ctx.settingsCards.register({
     id: "login",
     title: "Builderlab",

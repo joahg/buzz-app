@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import type {
   Host,
   HostResponse,
@@ -47,7 +48,29 @@ function agentStatus(value: unknown): RemoteAgent["status"] {
   return "Unknown";
 }
 
-export function createAgentClient(host: Host, session: OAuthSession) {
+/** Native owner identity: the viewer key and the Builderlab-binding-only signer. */
+export type OwnerIdentity = Readonly<{
+  key(): Promise<string | null>;
+  signBinding(challenge: Record<string, unknown>): Promise<object>;
+}>;
+const nativeOwner: OwnerIdentity = {
+  key: () => invoke("identity_restore"),
+  signBinding: (challenge) =>
+    invoke("identity_sign_builderlab_binding", { challenge }),
+};
+
+const LINK_ERRORS: Record<string, string> = {
+  identity_already_bound:
+    "This Builderlab account is linked to a different Buzz identity.",
+  pubkey_already_bound:
+    "This Buzz identity is linked to a different Builderlab account.",
+};
+
+export function createAgentClient(
+  host: Host,
+  session: OAuthSession,
+  owner: OwnerIdentity = nativeOwner,
+) {
   function check(credential: Credential, signal: AbortSignal) {
     signal.throwIfAborted();
     if (
@@ -106,12 +129,117 @@ export function createAgentClient(host: Host, session: OAuthSession) {
       throw new Error("Builderlab returned an invalid response.");
     }
   }
+  /** Builderlab's identity routes answer failures with `{ error: { code } }`. */
+  async function identityRequest(
+    path: string,
+    body: object,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    signal.throwIfAborted();
+    const credential = session.credential();
+    const target = oauthTarget();
+    let response: HostResponse;
+    try {
+      response = await host.request({
+        url: `${target}/v1/buzz/nostr-identities/${path}`,
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-BB-Session-Credential": credential.value,
+          // Binding requires the challenge origin to match this header.
+          Origin: new URL(target).origin,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      check(credential, signal);
+      throw new Error("Could not reach Builderlab. Try again.");
+    }
+    check(credential, signal);
+    let result: Record<string, unknown> | undefined;
+    try {
+      const parsed = JSON.parse(response.body);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+        result = parsed;
+    } catch {
+      // Reported below with the HTTP status.
+    }
+    const code = (result?.error as { code?: unknown } | undefined)?.code;
+    if (response.status >= 200 && response.status < 300 && result && !code)
+      return result;
+    if (typeof code === "string" && Object.hasOwn(LINK_ERRORS, code))
+      throw new Error(LINK_ERRORS[code]);
+    throw new Error(
+      `Could not link your Buzz identity to Builderlab (${
+        typeof code === "string" ? code : `HTTP ${response.status}`
+      }).`,
+    );
+  }
+  const boundKey = (result: Record<string, unknown>) => {
+    const hex = (result.identity as { pubkey_hex?: unknown } | undefined)
+      ?.pubkey_hex;
+    return typeof hex === "string" ? hex.toLowerCase() : null;
+  };
+  // Sign-in and the activation guard can overlap; they share one binding attempt.
+  let linking: { credential: Credential; done: Promise<void> } | undefined;
+  /** Binds this device's Buzz key to the signed-in account; attestation requires it. */
+  function link(signal: AbortSignal): Promise<void> {
+    const credential = session.credential();
+    if (linking?.credential !== credential) {
+      const done = bind(signal).finally(() => {
+        if (linking?.done === done) linking = undefined;
+      });
+      linking = { credential, done };
+    }
+    return linking.done;
+  }
+  async function bind(signal: AbortSignal): Promise<void> {
+    const key = await owner.key().catch(() => null);
+    signal.throwIfAborted();
+    if (typeof key !== "string" || !/^[0-9a-f]{64}$/.test(key))
+      throw new Error("Set up your Buzz identity before creating an agent.");
+    const credential = session.credential();
+    const bound = boundKey(await identityRequest("current", {}, signal));
+    if (bound === key) return;
+    // Never replace another key's binding; unlinking is the account owner's choice.
+    if (bound) throw new Error(LINK_ERRORS.identity_already_bound);
+    const challenge = await identityRequest(
+      "challenge",
+      { origin: new URL(oauthTarget()).origin },
+      signal,
+    );
+    const { challenge_id, nonce, verification_code, origin, expires_at } =
+      challenge;
+    let event: object;
+    try {
+      event = await owner.signBinding({
+        challenge_id,
+        nonce,
+        verification_code,
+        origin,
+        expires_at,
+      });
+    } catch (error) {
+      throw typeof error === "string" ? new Error(error) : error;
+    }
+    // A new sign-in while signing must not let the old account claim this key.
+    check(credential, signal);
+    const verified = await identityRequest(
+      "verify",
+      { challenge_id, nonce, signed_payload: JSON.stringify(event) },
+      signal,
+    );
+    if (boundKey(verified) !== key)
+      throw new Error("Builderlab did not confirm your Buzz identity link.");
+  }
   async function activate(
     pubkey: string,
     auth: NipOaAuthorization,
     community: string | undefined,
     signal: AbortSignal,
   ): Promise<void> {
+    await link(signal);
     const result = await request(
       "attest-agent",
       {
@@ -122,9 +250,16 @@ export function createAgentClient(host: Host, session: OAuthSession) {
       signal,
     );
     if (![1, "ACTIVE"].includes(resultStatus(result.status)))
-      throw new Error("Agent setup was not confirmed. Retry setup in Agents.");
+      throw new Error(
+        `Agent setup was not confirmed (${
+          typeof result.status === "string" || typeof result.status === "number"
+            ? result.status
+            : "no status"
+        }). Retry setup in Agents.`,
+      );
   }
   return {
+    link,
     activate,
     async updateInstructions(
       agent: RemoteAgent,

@@ -150,13 +150,14 @@ pub fn valid_id(id: &str) -> Result<()> {
     }
     Ok(())
 }
+/// The `BUZZ_BUILDERLAB_URL` build input's origin, or empty when unconfigured.
+pub const BUILDERLAB_ORIGIN: &str = env!("BUZZ_BUILDERLAB_ORIGIN");
 pub fn bundled_manifests() -> Vec<Manifest> {
     let mut builderlab: Manifest = serde_json::from_str(include_str!(
         "../../../src/bundled/builderlab/manifest.json"
     ))
     .expect("builderlab manifest");
-    // The build script derives this compile-time constant from BUZZ_BUILDERLAB_URL.
-    let origin = env!("BUZZ_BUILDERLAB_ORIGIN");
+    let origin = BUILDERLAB_ORIGIN;
     builderlab.host = Some(HostGrants {
         network_origins: if origin.is_empty() {
             vec![]

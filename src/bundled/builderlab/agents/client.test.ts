@@ -28,6 +28,8 @@ const response = (value: unknown, status = 200): HostResponse => ({
   headers: {},
   body: JSON.stringify(value),
 });
+const viewer = "cd".repeat(32);
+const bound = (pubkey_hex = viewer) => response({ identity: { pubkey_hex } });
 async function fixture(subject = "user") {
   const session = createOAuthSession(async () => ({
     value: "secret",
@@ -40,10 +42,15 @@ async function fixture(subject = "user") {
       response({ status: "LIST_AGENTS_STATUS_SUCCESS", agents: [row] }),
     ),
   };
+  const owner = {
+    key: vi.fn(async (): Promise<string | null> => viewer),
+    signBinding: vi.fn(async () => ({ id: "signed-binding" })),
+  };
   return {
     session,
     host,
-    client: createAgentClient(host, session),
+    owner,
+    client: createAgentClient(host, session, owner),
     retain: vi.fn(),
     signal: new AbortController().signal,
   };
@@ -273,6 +280,7 @@ it("registers with a saved UUID and submits the supplied owner proof", async () 
         agent_pubkey: row.agent_pubkey,
       }),
     )
+    .mockResolvedValueOnce(bound())
     .mockResolvedValueOnce(response({ status: "ATTEST_AGENT_STATUS_ACTIVE" }));
   const agent = await h.client.register(" Helper ", h.signal, h.retain);
   expect(agent).toMatchObject({ name: "Helper", status: "Unattested" });
@@ -396,4 +404,141 @@ it("blocks creation when the intent cannot be stored", async () => {
     "Could not save",
   );
   expect(h.host.request).not.toHaveBeenCalled();
+});
+const challenge = {
+  challenge_id: "550e8400-e29b-41d4-a716-446655440000",
+  nonce: "n".repeat(43),
+  verification_code: "123456",
+  origin: "https://builderlab.example",
+  expires_at: "2999-01-01T00:00:00Z",
+};
+it("links an unbound Buzz key to the account before attesting", async () => {
+  const h = await fixture();
+  vi.mocked(h.host.request)
+    .mockResolvedValueOnce(response({ correlation_id: "c" }))
+    .mockResolvedValueOnce(response({ ...challenge, kind: 24243 }))
+    .mockResolvedValueOnce(bound())
+    .mockResolvedValueOnce(response({ status: "ATTEST_AGENT_STATUS_ACTIVE" }));
+  await h.client.activate(row.agent_pubkey, proof, undefined, h.signal);
+  const calls = vi.mocked(h.host.request).mock.calls.map(([input]) => input);
+  expect(calls.map((input) => input.url)).toEqual([
+    "https://builderlab.example/api/goose/v1/buzz/nostr-identities/current",
+    "https://builderlab.example/api/goose/v1/buzz/nostr-identities/challenge",
+    "https://builderlab.example/api/goose/v1/buzz/nostr-identities/verify",
+    "https://builderlab.example/api/goose/v3/beekeeper/attest-agent",
+  ]);
+  expect(calls[1]?.headers).toEqual({
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "X-BB-Session-Credential": "secret",
+    Origin: "https://builderlab.example",
+  });
+  expect(JSON.parse(calls[1]?.body ?? "")).toEqual({
+    origin: "https://builderlab.example",
+  });
+  expect(h.owner.signBinding).toHaveBeenCalledWith(challenge);
+  expect(JSON.parse(calls[2]?.body ?? "")).toEqual({
+    challenge_id: challenge.challenge_id,
+    nonce: challenge.nonce,
+    signed_payload: JSON.stringify({ id: "signed-binding" }),
+  });
+});
+it("skips linking when this key is already bound", async () => {
+  const h = await fixture();
+  vi.mocked(h.host.request)
+    .mockResolvedValueOnce(bound(viewer.toUpperCase()))
+    .mockResolvedValueOnce(response({ status: 1 }));
+  await h.client.activate(row.agent_pubkey, proof, undefined, h.signal);
+  expect(h.host.request).toHaveBeenCalledTimes(2);
+  expect(h.owner.signBinding).not.toHaveBeenCalled();
+});
+it.each([
+  [
+    "another key is bound to the account",
+    [bound("ab".repeat(32))],
+    "linked to a different Buzz identity",
+  ],
+  [
+    "the key is bound to another account",
+    [
+      response({ correlation_id: "c" }),
+      response(challenge),
+      response({ error: { code: "pubkey_already_bound" } }, 409),
+    ],
+    "linked to a different Builderlab account",
+  ],
+  [
+    "the origin is refused",
+    [
+      response({ correlation_id: "c" }),
+      response({ error: { code: "invalid_origin" } }, 403),
+    ],
+    "(invalid_origin)",
+  ],
+])("refuses to attest when %s", async (_, replies, message) => {
+  const h = await fixture();
+  for (const reply of replies)
+    vi.mocked(h.host.request).mockResolvedValueOnce(reply);
+  await expect(
+    h.client.activate(row.agent_pubkey, proof, undefined, h.signal),
+  ).rejects.toThrow(message);
+  expect(
+    vi
+      .mocked(h.host.request)
+      .mock.calls.some(([input]) => input.url.endsWith("/attest-agent")),
+  ).toBe(false);
+});
+it("refuses to link without a local Buzz identity", async () => {
+  const h = await fixture();
+  h.owner.key.mockResolvedValueOnce(null);
+  await expect(h.client.link(h.signal)).rejects.toThrow(
+    "Set up your Buzz identity",
+  );
+  expect(h.host.request).not.toHaveBeenCalled();
+});
+it("does not verify a binding signed under a replaced session", async () => {
+  const h = await fixture();
+  vi.mocked(h.host.request)
+    .mockResolvedValueOnce(response({ correlation_id: "c" }))
+    .mockResolvedValueOnce(response(challenge));
+  h.owner.signBinding.mockImplementationOnce(async () => {
+    h.session.signOut();
+    return { id: "signed-binding" };
+  });
+  await expect(h.client.link(h.signal)).rejects.toThrow("session changed");
+  expect(h.host.request).toHaveBeenCalledTimes(2);
+});
+it("names the attest status when setup is not confirmed", async () => {
+  const h = await fixture();
+  vi.mocked(h.host.request)
+    .mockResolvedValueOnce(bound())
+    .mockResolvedValueOnce(
+      response({ status: "ATTEST_AGENT_STATUS_NO_OWNER_IDENTITY_BOUND" }),
+    );
+  await expect(
+    h.client.activate(row.agent_pubkey, proof, undefined, h.signal),
+  ).rejects.toThrow(
+    "Agent setup was not confirmed (ATTEST_AGENT_STATUS_NO_OWNER_IDENTITY_BOUND).",
+  );
+});
+it("shares one binding attempt between overlapping links", async () => {
+  const h = await fixture();
+  const current = deferred<HostResponse>();
+  vi.mocked(h.host.request)
+    .mockImplementationOnce(() => current.promise)
+    .mockResolvedValueOnce(response({ status: 1 }));
+  const signIn = h.client.link(h.signal);
+  const activation = h.client.activate(
+    row.agent_pubkey,
+    proof,
+    undefined,
+    h.signal,
+  );
+  current.resolve(bound());
+  await Promise.all([signIn, activation]);
+  expect(
+    vi
+      .mocked(h.host.request)
+      .mock.calls.map(([input]) => input.url.split("/").at(-1)),
+  ).toEqual(["current", "attest-agent"]);
 });
