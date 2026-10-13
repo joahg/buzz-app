@@ -1,3 +1,7 @@
+import {
+  ATTENTION_PROMPT,
+  ATTENTION_REVIEW,
+} from "../../buzz-mcp/attention-prompt";
 import { BUZZ_PROMPT, coreMemory } from "../../buzz-mcp/prompt";
 import type { AgentHandle } from "../../features/agents/service";
 import type { EventData } from "../../features/relay/events";
@@ -16,6 +20,8 @@ export function developerInstructions(
   team = "",
   /** The agent's `core` memory: `null` when it has none, undefined if unread. */
   memory?: string | null,
+  /** Whether the thread has the attention tools. */
+  attention = false,
 ) {
   const core = coreMemory(memory);
   return `You are ${agent.name} (pubkey ${agent.pubkey}), a coding agent in Buzz.
@@ -23,7 +29,7 @@ The buzz namespace provides the shared Buzz tools, including messages, reactions
 
 ${basePrompt.trim()}
 
-${BUZZ_PROMPT}
+${BUZZ_PROMPT}${attention ? `\n\n${ATTENTION_PROMPT}` : ""}
 
 ${settings ? `Current Buzz custom instructions replace all prior Buzz custom instructions. An empty section means no custom instructions apply.\n<agent-instructions>\n${settings.instructions}\n</agent-instructions>\n\nCurrent team sections replace all prior team sections. None means you are on no team.${team ? `\n${team}` : ""}${core ? `\n\nCurrent core memory replaces all prior core memory.\n${core}` : ""}` : ""}`;
 }
@@ -32,13 +38,14 @@ export function turnInput(
   event: EventData,
   conversation: Conversation,
   text: string,
-  interest = "",
   steering = false,
+  /** Whether the agent has attention on: the turn ends with its review. */
+  attention = false,
 ) {
   const section = steering
     ? "new-message-arrived-while-you-were-working"
     : "buzz-event";
-  return `<context>\n${quoted({ channel_id: conversation.channelId, channel_name: conversation.name, session_scope: conversation.root ? "thread" : "channel", session_thread: conversation.root, reply_to: rootOf(event) })}\n</context>\n<${section}>\n${quoted(event)}\nRequest: ${quoted(text)}\n</${section}>${interest ? `\n<interest>\n${quoted(interest)}\n</interest>` : ""}`;
+  return `<context>\n${quoted({ channel_id: conversation.channelId, channel_name: conversation.name, session_scope: conversation.root ? "thread" : "channel", session_thread: conversation.root, reply_to: rootOf(event) })}\n</context>\n<${section}>\n${quoted(event)}\nRequest: ${quoted(text)}\n</${section}>${attention ? `\n\n${ATTENTION_REVIEW}` : ""}`;
 }
 /** The readable part of a conversation's thread name; earlier versions used
  * it alone. */
