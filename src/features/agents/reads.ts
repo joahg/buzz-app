@@ -8,6 +8,12 @@ import type { Memory } from "../../buzz-mcp/client";
 import type { EventData, ReadFilter, RelayEvent } from "../relay/events";
 import type { RelayData } from "../relay/service";
 
+/** The agent's memory entries, and whether some may be missing. */
+export type MemoryListing = Readonly<{
+  entries: readonly Memory[];
+  partial: boolean;
+}>;
+
 /** What a turn needs to know of its channel. */
 export type ChannelFacts = Readonly<{
   name?: string;
@@ -16,6 +22,8 @@ export type ChannelFacts = Readonly<{
 }>;
 
 export type AgentReads = Readonly<{
+  /** The community these reads are of; it changes when the agent's does. */
+  scope: string;
   /** The channel as the community lists it, or undefined when unknown. */
   channel(id: string): Promise<ChannelFacts | undefined>;
   read(
@@ -33,11 +41,12 @@ export type AgentReads = Readonly<{
   channelName(id: string): string | undefined;
   /** The key the community signs workflow messages with, if known. */
   workflowAuthority(): string | undefined;
-  /** The agent's memory entries. */
-  memories(): Promise<readonly Memory[]>;
+  /** The agent's memory entries; `signal` stops the read. */
+  memories(signal?: AbortSignal): Promise<readonly Memory[]>;
+  /** The agent's memory, read without holding a view; `partial` when the
+   * entries may be incomplete. `signal` stops the read. */
+  memoryListing(signal: AbortSignal): Promise<MemoryListing>;
 }>;
-
-const MEMORY_TIMEOUT_MS = 5_000;
 
 /** The reads of the owner's connection to the agent's community, while it is
  * ready; undefined otherwise. Memory is encrypted to the owner, so the owner's
@@ -50,6 +59,7 @@ export function ownerReads(
   if (snapshot?.status !== "ready") return undefined;
   const { session } = snapshot;
   return Object.freeze({
+    scope: snapshot.scope ?? "",
     channel: async (id: string) => {
       const summary =
         session.channels.list().channels.find((item) => item.id === id) ??
@@ -74,30 +84,29 @@ export function ownerReads(
     channelName: (id: string) =>
       session.channels.list().channels.find((item) => item.id === id)?.name,
     workflowAuthority: () => session.workflowAuthority,
-    memories: async () => {
+    memoryListing: (signal: AbortSignal) =>
+      session.agentMemories.read(pubkey, signal),
+    memories: async (signal?: AbortSignal) => {
+      signal?.throwIfAborted();
       const view = session.agentMemories.open(pubkey);
+      // Stopping the read disposes the view, which ends its refresh.
+      let stop!: (reason: unknown) => void;
+      const stopped = new Promise<never>((_, reject) => {
+        stop = reject;
+      });
+      const abort = () => {
+        stop(signal?.reason);
+        view.dispose();
+      };
+      signal?.addEventListener("abort", abort, { once: true });
       try {
-        const done = new Promise<void>((resolve) => {
-          const settled = () =>
-            !["idle", "loading"].includes(view.snapshot().status) && resolve();
-          view.subscribe(settled);
-          settled();
-        });
-        void view.refresh();
-        await Promise.race([
-          done,
-          new Promise((_, reject) =>
-            setTimeout(
-              () => reject(new Error("Memory read timed out")),
-              MEMORY_TIMEOUT_MS,
-            ),
-          ),
-        ]);
+        await Promise.race([view.refresh(), stopped]);
         const { status, listing } = view.snapshot();
         if (status !== "ready" || !listing)
           throw new Error(`Memory unavailable (${status})`);
         return listing.entries;
       } finally {
+        signal?.removeEventListener("abort", abort);
         view.dispose();
       }
     },

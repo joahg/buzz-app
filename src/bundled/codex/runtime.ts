@@ -1,15 +1,13 @@
 import type { WorkOutcome } from "../../features/agents/local-activity";
-import {
-  fromOwner,
-  type Agent,
-  type AgentHandle,
-  type Delivery,
-  type Models,
+import { fromOwner, workflowOf } from "../../features/agents/owner-attestation";
+import type { AgentReads, MemoryListing } from "../../features/agents/reads";
+import type {
+  Agent,
+  AgentHandle,
+  Delivery,
+  Models,
 } from "../../features/agents/service";
-import type { RelayData } from "../../features/relay/service";
-import type { RelaySession } from "../../features/relay/session";
 import type { EventData } from "../../features/relay/events";
-import type { MemoryListing } from "../../features/agents/memory";
 import { appClient } from "../../buzz-mcp/app-client";
 import { TOOLS, callTool } from "../../buzz-mcp/tools";
 import {
@@ -123,6 +121,9 @@ function textOf(event: EventData, name: string) {
   if (text.startsWith(`@${name}`)) text = text.slice(name.length + 1).trim();
   return text;
 }
+/** Where a turn's shared memory read is kept: per community and agent. */
+const memoryKey = (scope: string, pubkey: string) =>
+  JSON.stringify([scope, pubkey]);
 async function abortable<T>(promise: Promise<T>, signal: AbortSignal) {
   signal.throwIfAborted();
   return new Promise<T>((resolve, reject) => {
@@ -152,15 +153,12 @@ export class CodexRuntime {
   private listeners = new Set<() => void>();
   /** Read-only model discovery, kept per agent until its settings change. */
   private previews = new Map<string, { key: string; ready: Promise<Models> }>();
-  /** One owner-view read per session and agent; concurrent turns share it. */
-  private memoryReads = new WeakMap<
-    RelaySession,
-    Map<string, Promise<MemoryListing>>
-  >();
+  /** One memory read per community and agent; concurrent turns share it. */
+  private memoryReads = new Map<string, Promise<MemoryListing>>();
   constructor(
     private readonly spawn: Spawn,
-    /** The owner's connection to each agent's own community. */
-    private readonly relay: (pubkey: string) => RelayData | undefined,
+    /** What each agent's turns read of its community, while it can be read. */
+    private readonly reads: (pubkey: string) => AgentReads | undefined,
     private readonly storage: Storage = localStorage,
     private readonly resolveConfig: (raw: unknown) => Config = config,
   ) {}
@@ -367,12 +365,10 @@ export class CodexRuntime {
   }
   /** The agent's bindings in this community, most recently used first. */
   conversations(pubkey: string): SavedConversation[] {
-    const snapshot = this.relay(pubkey)?.snapshot();
-    const ready = snapshot?.status === "ready" ? snapshot : undefined;
+    const reads = this.reads(pubkey);
     const saved =
       this.entries.get(pubkey)?.saved ??
-      (ready ? this.load(this.storageKey(ready.scope ?? "", pubkey)) : {});
-    const channels = ready?.session.channels.list().channels ?? [];
+      (reads ? this.load(this.storageKey(reads.scope, pubkey)) : {});
     // Untimestamped bindings keep save order, newest last; listed newest first.
     return Object.entries(saved)
       .reverse()
@@ -381,7 +377,7 @@ export class CodexRuntime {
           const [channelId, root] = JSON.parse(key) as unknown[];
           if (typeof channelId !== "string" || typeof root !== "string")
             return [];
-          const name = channels.find((row) => row.id === channelId)?.name;
+          const name = reads?.channelName(channelId);
           return [
             {
               key,
@@ -400,12 +396,7 @@ export class CodexRuntime {
   }
   /** A display name for a pubkey in the agent's community, if known. */
   name(agentPubkey: string, pubkey: string) {
-    const snapshot = this.relay(agentPubkey)?.snapshot();
-    return snapshot?.status === "ready"
-      ? (snapshot.session.names.resolve(pubkey) ??
-          snapshot.session.profiles.snapshot().get(pubkey)?.name ??
-          undefined)
-      : undefined;
+    return this.reads(agentPubkey)?.name(pubkey);
   }
   /** The agent's latest thread for a conversation that another build of the
    * app started, found by the name the agent gave it. */
@@ -414,13 +405,7 @@ export class CodexRuntime {
     place: Readonly<{ channelId: string; root?: string }>,
     signal: AbortSignal,
   ): Promise<SavedConversation | undefined> {
-    const snapshot = this.relay(agent.pubkey)?.snapshot();
-    const name =
-      snapshot?.status === "ready"
-        ? snapshot.session.channels
-            .list()
-            .channels.find((row) => row.id === place.channelId)?.name
-        : undefined;
+    const name = this.reads(agent.pubkey)?.channelName(place.channelId);
     const found = await findConversation(
       this.spawn,
       { agent, ...place, ...(name ? { name } : {}) },
@@ -464,32 +449,24 @@ export class CodexRuntime {
       throw new Error(
         "Codex timers are not supported yet; use mentions or event watches.",
       );
-    const snapshot = this.relay(agent.pubkey)?.snapshot();
+    const reads = this.reads(agent.pubkey);
     if (
-      !(await fromOwner(trigger.event, agent.owner, {
-        agent: agent.pubkey,
-        authority:
-          snapshot?.status === "ready"
-            ? snapshot.session.workflowAuthority
-            : undefined,
-        profiles:
-          snapshot?.status === "ready" ? snapshot.session.profiles : undefined,
-      }))
+      !(await fromOwner(
+        trigger.event,
+        agent.owner,
+        workflowOf(reads, agent.pubkey),
+      ))
     ) {
       delivery.ignored?.();
       return;
     }
     delivery.signal.throwIfAborted();
-    if (snapshot?.status !== "ready")
-      throw new Error("Connect to the agent's community first");
+    if (!reads) throw new Error("Connect to the agent's community first");
     const channelId = delivery.channelId;
     if (!channelId) throw new Error("The event has no unambiguous channel");
     const settings = this.resolveConfig(delivery.config);
-    const channel = snapshot.session.channels
-      .list()
-      .channels.find((row) => row.id === channelId);
-    const toolRoot =
-      channel?.channelType === "dm" ? undefined : rootOf(trigger.event);
+    const channel = await reads.channel(channelId);
+    const toolRoot = channel?.dm ? undefined : rootOf(trigger.event);
     const root = settings.scope === "channel" ? undefined : toolRoot;
     let finishActivity!: (result: WorkOutcome) => void;
     const replied = new Promise<WorkOutcome>((resolve) => {
@@ -502,7 +479,7 @@ export class CodexRuntime {
     // Codex makes one more model call after a final send before its turn
     // ends; the agent is done working on this request once it has replied.
     const request: Request = {
-      scope: snapshot.scope ?? "",
+      scope: reads.scope,
       event: trigger.event,
       agent,
       settings,
@@ -661,11 +638,11 @@ export class CodexRuntime {
   }
   private async history(request: Request, signal: AbortSignal) {
     signal.throwIfAborted();
-    const snapshot = this.relay(request.agent.pubkey)?.snapshot();
-    if (snapshot?.status !== "ready" || snapshot.scope !== request.scope)
+    const reads = this.reads(request.agent.pubkey);
+    if (reads?.scope !== request.scope)
       throw new Error("The community changed");
     return conversationHistory(request.event, request.conversation, (filters) =>
-      snapshot.session.read(filters, { signal }),
+      reads.read(filters, signal),
     );
   }
   // Tags the owner even when a sibling asked: tagging the sibling would wake
@@ -722,9 +699,7 @@ export class CodexRuntime {
         return entries;
       },
       remembered: () => {
-        const snapshot = this.relay(request.agent.pubkey)?.snapshot();
-        if (snapshot?.status === "ready")
-          this.memoryReads.get(snapshot.session)?.delete(request.agent.pubkey);
+        this.memoryReads.delete(memoryKey(request.scope, request.agent.pubkey));
       },
     });
     const reply = await callTool(
@@ -753,38 +728,26 @@ export class CodexRuntime {
       ],
     };
   }
-  /** The agent's memory, read back through the owner's session: it is
-   * encrypted to the owner, so no agent key is needed to read it. */
+  /** The agent's memory, as its community's reads give it. */
   private async memories(request: Request, signal: AbortSignal) {
-    const snapshot = this.relay(request.agent.pubkey)?.snapshot();
-    if (snapshot?.status !== "ready" || snapshot.scope !== request.scope)
+    const { pubkey } = request.agent;
+    const reads = this.reads(pubkey);
+    if (reads?.scope !== request.scope)
       throw new Error("Buzz is not connected to this community");
-    const { session } = snapshot;
-    let reads = this.memoryReads.get(session);
-    if (!reads) {
-      reads = new Map();
-      this.memoryReads.set(session, reads);
-    }
-    let read = reads.get(request.agent.pubkey);
+    const key = memoryKey(request.scope, pubkey);
+    let read = this.memoryReads.get(key);
     if (!read) {
-      read = session.agentMemories.read(
-        request.agent.pubkey,
-        AbortSignal.timeout(10000),
-      );
-      reads.set(request.agent.pubkey, read);
-      void read.then(
-        () => reads?.delete(request.agent.pubkey),
-        () => reads?.delete(request.agent.pubkey),
-      );
+      const started = reads.memoryListing(AbortSignal.timeout(10000));
+      const settled = () => {
+        if (this.memoryReads.get(key) === started) this.memoryReads.delete(key);
+      };
+      void started.then(settled, settled);
+      this.memoryReads.set(key, started);
+      read = started;
     }
     const listing = await abortable(read, signal);
     signal.throwIfAborted();
-    const current = this.relay(request.agent.pubkey)?.snapshot();
-    if (
-      current?.status !== "ready" ||
-      current.scope !== request.scope ||
-      current.session !== session
-    )
+    if (this.reads(pubkey)?.scope !== request.scope)
       throw new Error("Buzz is not connected to this community");
     return listing;
   }

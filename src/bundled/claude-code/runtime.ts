@@ -75,6 +75,7 @@ export type SavedConversation = Conversation & {
 
 /** How long a read of the agent's core memory is reused. */
 const MEMORY_TTL_MS = 5 * 60_000;
+const MEMORY_TIMEOUT_MS = 5_000;
 const NAMES_TIMEOUT_MS = 2_000;
 const CHAT = [9, 40002];
 
@@ -712,7 +713,16 @@ export class ClaudeRuntime {
   private async readMemories(pubkey: string): Promise<readonly Memory[]> {
     const reads = this.reads(pubkey);
     if (!reads) throw new Error("Buzz is not connected");
-    return reads.memories();
+    const stop = new AbortController();
+    const timer = setTimeout(
+      () => stop.abort(new Error("Memory read timed out")),
+      MEMORY_TIMEOUT_MS,
+    );
+    try {
+      return await reads.memories(stop.signal);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 
