@@ -1372,8 +1372,9 @@ export class AgentsService extends Service implements Agents {
   }
 
   /** Reads the agent list from native. Every change is made there first and
-   * then read back here, so the list has one source. */
-  private async refresh() {
+   * then read back here, so the list has one source. A failed read is shown
+   * until a retry, from wherever the list is shown, reads it. */
+  async refresh() {
     if (!this.native) return;
     const turn = ++this.listed;
     try {
@@ -1381,7 +1382,8 @@ export class AgentsService extends Service implements Agents {
       // A newer list is on its way; this one may predate a change.
       if (turn !== this.listed) return;
       this.identities = identities;
-      this.state = Object.freeze({ ...this.state, status: "ready" });
+      const { error: _, ...state } = this.state;
+      this.state = Object.freeze({ ...state, status: "ready" });
       // Settings whose agent is gone do nothing.
       const live = new Set(
         identities

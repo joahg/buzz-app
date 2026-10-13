@@ -80,9 +80,10 @@ Do not build another agent inventory in a plugin. `useAgentChoices(session,
 includeLegacy, archive)` retains the projection while mounted, which preserves
 ready evidence across menu remounts, and ensures the lazy library and archive reads
 on demand. Ordinary mentions subscribe without loading the library
-(`includeLegacy` false); explicit Refresh retries source failures. The projection
-adds no runner, polling, directory scan or signing authority, and session
-retirement revokes its candidates.
+(`includeLegacy` false); explicit Refresh retries source failures, reading a
+failed local list again through Agents rather than substituting the library. The
+projection adds no runner, polling, directory scan or signing authority, and
+session retirement revokes its candidates.
 
 `templates` serves saved channel-kit templates and section defaults (session setup
 resolves lineups through it with `templateAgentChoices`). Its identities are the

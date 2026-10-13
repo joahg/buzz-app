@@ -72,7 +72,11 @@ export function createServices() {
   const relay = communities.relay;
   const agents = new AgentsService(ctx, communities);
   ctx.effect(() =>
-    localAgents.bind({ snapshot: agents.local, subscribe: agents.subscribe }),
+    localAgents.bind({
+      snapshot: agents.local,
+      subscribe: agents.subscribe,
+      refresh: () => agents.refresh(),
+    }),
   );
   const notifications = new NotificationsService(
     ctx,

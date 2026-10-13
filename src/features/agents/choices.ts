@@ -213,6 +213,9 @@ export function createAgentChoices({
       if (signal.aborted) return;
       await Promise.all([
         usesLegacy(source) ? library.refresh() : undefined,
+        // A failed local list is read again by its owner, never replaced by
+        // the legacy inventory. A list that read stays as native keeps it.
+        native?.snapshot().status === "error" ? native.refresh?.() : undefined,
         // Archive reads stay lazy; templates always need fresh evidence.
         source === "templates" || archives?.snapshot().status !== "idle"
           ? archives?.refresh()

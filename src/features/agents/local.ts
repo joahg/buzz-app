@@ -15,6 +15,8 @@ export type LocalAgentsSnapshot = Readonly<{
 export type LocalAgents = {
   snapshot(): LocalAgentsSnapshot;
   subscribe(listener: () => void): () => void;
+  /** Lists again, so a failed read can be retried where it is shown. */
+  refresh?(): Promise<void>;
 };
 
 const unavailable: LocalAgentsSnapshot = Object.freeze({
@@ -32,6 +34,9 @@ export function createLocalAgents() {
   };
   const agents: LocalAgents = {
     snapshot: () => source?.snapshot() ?? unavailable,
+    refresh: async () => {
+      await source?.refresh?.();
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => {

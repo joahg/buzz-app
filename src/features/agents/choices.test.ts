@@ -160,10 +160,11 @@ it.each(["loading", "failed", "partial"])(
 it("revokes failed local evidence without dropping ready legacy candidates, then recovers and unsubscribes on retirement", async () => {
   const native = localAgentsFixture([agent]);
   const legacy = { pubkey: "cd".repeat(32), name: "Legacy" };
-  const library = createAgentLibrary(async () => ({
-    definitions: [],
-    identities: [legacy],
-  }));
+  let reads = 0;
+  const library = createAgentLibrary(async () => {
+    reads++;
+    return { definitions: [], identities: [legacy] };
+  });
   const lifetime = new AbortController();
   const choices = createAgentChoices({
     scope,
@@ -195,8 +196,22 @@ it("revokes failed local evidence without dropping ready legacy candidates, then
     error: "Could not list agents",
   });
   expect(choices.snapshot().error).toContain("Could not list agents");
-  native.set({ status: "ready", agents: [agent] });
+  // Retry reads the failed local list again through its owner; the legacy
+  // inventory is not loaded in its place.
+  expect(reads).toBe(1);
+  await choices.refresh("templates");
+  expect(native.refreshes()).toBe(1);
+  expect(reads).toBe(1);
+  expect(choices.snapshot().templates).toMatchObject({
+    status: "ready",
+    complete: true,
+    identities: [{ pubkey: agent.pubkey }],
+  });
   expect(choices.snapshot().identities).toHaveLength(2);
+  // A list that read is not read again by a refresh of the other sources.
+  await choices.refresh();
+  expect(native.refreshes()).toBe(1);
+  expect(reads).toBe(2);
   lifetime.abort();
   const retired = notifications;
   native.set({ agents: [] });

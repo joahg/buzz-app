@@ -7,6 +7,16 @@ export function localAgentsFixture(
 ) {
   let state: LocalAgentsSnapshot = { status, agents };
   const listeners = new Set<() => void>();
+  let refreshes = 0;
+  /** An error lasts only as long as the update that reports it. */
+  const set = (next: Partial<LocalAgentsSnapshot>) => {
+    state = {
+      status: next.status ?? state.status,
+      agents: next.agents ?? state.agents,
+      ...(next.error ? { error: next.error } : {}),
+    };
+    for (const listener of [...listeners]) listener();
+  };
   return {
     snapshot: () => state,
     subscribe(listener: () => void) {
@@ -15,15 +25,13 @@ export function localAgentsFixture(
         listeners.delete(listener);
       };
     },
-    /** An error lasts only as long as the update that reports it. */
-    set(next: Partial<LocalAgentsSnapshot>) {
-      state = {
-        status: next.status ?? state.status,
-        agents: next.agents ?? state.agents,
-        ...(next.error ? { error: next.error } : {}),
-      };
-      for (const listener of [...listeners]) listener();
+    /** A list read again succeeds with the agents it has. */
+    refresh: async () => {
+      refreshes++;
+      set({ status: "ready" });
     },
+    set,
     listeners: () => listeners.size,
+    refreshes: () => refreshes,
   } satisfies LocalAgents & Record<string, unknown>;
 }

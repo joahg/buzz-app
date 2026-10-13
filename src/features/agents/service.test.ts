@@ -391,6 +391,24 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+it("shows a failed agent list, with its reason, until a retry reads it", async () => {
+  const { service, native } = await setup();
+  native.list.mockRejectedValueOnce(new Error("Keychain locked"));
+  await service.refresh();
+  expect(service.snapshot()).toMatchObject({
+    status: "error",
+    error: "Keychain locked",
+  });
+  expect(service.local()).toMatchObject({
+    status: "error",
+    error: "Keychain locked",
+  });
+  await service.refresh();
+  expect(service.snapshot().status).toBe("ready");
+  expect(service.snapshot().error).toBeUndefined();
+  expect(service.local()).toEqual({ status: "ready", agents: [] });
+});
+
 it("creates an agent in the community shown, with its type's defaults, and publishes its profile", async () => {
   const { service, native } = await setup();
   const agent = await service.create({ type: "example/echo", name: " Echo " });
