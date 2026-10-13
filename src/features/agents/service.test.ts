@@ -86,8 +86,6 @@ function fakeRelay(origin = "https://relay.example.test") {
   const session = {
     archives,
     read: vi.fn(async () => [...listed]),
-    // STOPGAP(agent-local-typing): delete with local-typing.ts.
-    typing: { local: vi.fn() },
     // The agent is in `channel`; `private` is the owner's alone.
     channels: {
       list: () => ({
@@ -594,8 +592,9 @@ it("leaves the team section out for an agent on no team", () => {
   ).toBe("");
 });
 
-it("keeps handed-off activity local, without publishing working reactions", async () => {
-  const { service, run, emit, native, relay, activity } = await setup();
+it("keeps handed-off activity local, and pulses typing in the thread until the turn ends", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const { service, run, emit, native, activity } = await setup();
   await service.create({ type: "example/echo", name: "Echo" });
   let finish = () => {};
   const turn = new Promise<void>((resolve) => {
@@ -609,27 +608,28 @@ it("keeps handed-off activity local, without publishing working reactions", asyn
     ],
   });
   emit({ events: [mention], channelId: channel });
-  const typing = relay.snapshot().session.typing.local;
   try {
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     await settle();
     expect(activity.reader.work()[0]?.state).toBe("working");
-    expect(typing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pubkey: bot,
-        kind: 20002,
-        tags: [
-          ["h", channel],
-          ["e", mention.id, "", "reply"],
-        ],
-      }),
-    );
+    expect(native.publish).toHaveBeenCalledWith(bot, {
+      kind: 20002,
+      content: "",
+      tags: [
+        ["h", channel],
+        ["e", mention.id, "", "reply"],
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(await published(native, 20002)).toHaveLength(2);
     expect(await published(native, 7)).toEqual([]);
     finish();
     await vi.waitFor(() =>
-      expect(typing).toHaveBeenCalledWith(expect.objectContaining({ kind: 9 })),
+      expect(activity.reader.work()[0]?.state).toBe("done"),
     );
-    expect(activity.reader.work()[0]?.state).toBe("done");
+    // Pulses stop with the turn.
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(await published(native, 20002)).toHaveLength(2);
     expect(await published(native, 7)).toEqual([]);
     expect(await published(native, 5)).toEqual([]);
   } finally {

@@ -11,7 +11,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 /// A NIP-98 `Authorization` header for one signed HTTP auth event.
 fn authorization(event: Value) -> Result<String, String> {
@@ -490,8 +491,9 @@ pub(crate) async fn app_agent_query(
 
 async fn read(agent: &AppAgent, key: &Secret, filters: &[Value]) -> Result<Value, String> {
     let bytes = serde_json::to_vec(filters).map_err(|_| "Could not encode agent read")?;
-    let response = client(20)?
+    let response = client()?
         .post(agent.query_url())
+        .timeout(Duration::from_secs(20))
         .header("Content-Type", "application/json")
         .header(
             "Authorization",
@@ -544,8 +546,9 @@ pub(crate) async fn app_agent_upload(
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let auth = serde_json::to_vec(&agent.upload_auth(&key, &sha256)?)
         .map_err(|_| "Could not authorize upload")?;
-    let response = client(120)?
+    let response = client()?
         .put(agent.upload_url())
+        .timeout(Duration::from_secs(120))
         .header("Content-Type", &mime)
         .header("X-SHA-256", &sha256)
         .header(
@@ -588,8 +591,9 @@ pub(crate) async fn app_agent_media(
     let url = agent.media_url(&url)?;
     let auth =
         serde_json::to_vec(&agent.media_auth(&key)?).map_err(|_| "Could not authorize media")?;
-    let response = client(120)?
+    let response = client()?
         .get(&url)
+        .timeout(Duration::from_secs(120))
         .header(
             "Authorization",
             format!(
@@ -628,11 +632,21 @@ pub(crate) async fn app_agent_remember(
     post(&agent, &key, signed).await
 }
 
-fn client(seconds: u64) -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(seconds))
-        .build()
+/// One client for every agent request, so frequent small posts such as
+/// typing pulses reuse a connection instead of opening a new one each time.
+/// Each request sets its own timeout.
+fn client() -> Result<&'static reqwest::Client, String> {
+    static CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(10))
+                // A connection idle across sleep may be dead; open a new one.
+                .pool_idle_timeout(Duration::from_secs(30))
+                .build()
+        })
+        .as_ref()
         .map_err(|_| "Agent client unavailable".into())
 }
 
@@ -666,8 +680,9 @@ async fn post(agent: &AppAgent, key: &Secret, signed: Value) -> Result<Value, St
         .ok_or("Invalid agent event")?
         .to_owned();
     let bytes = serde_json::to_vec(&signed).map_err(|_| "Could not encode agent event")?;
-    let response = client(20)?
+    let response = client()?
         .post(agent.events_url())
+        .timeout(Duration::from_secs(20))
         .header("Content-Type", "application/json")
         .header(
             "Authorization",

@@ -241,7 +241,7 @@ fn signs_only_bounded_kinds_with_the_saved_attestation() {
     let (_, agent) = created(dir.path(), &credentials);
     let key = agent.read_key(&credentials).unwrap();
     let saved: Vec<String> = serde_json::from_str(&agent.auth).unwrap();
-    for kind in [5, 7, 9, 40003, 40100, 41010] {
+    for kind in [5, 7, 9, 20002, 40003, 40100, 41010] {
         let tags = vec![
             vec!["auth".to_owned(), "forged".to_owned()],
             vec!["h".to_owned(), "channel".to_owned()],
