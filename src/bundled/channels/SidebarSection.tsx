@@ -34,6 +34,7 @@ import {
   ChatUnreadIcon,
   DotsThreeIcon,
   Filter2Icon,
+  ListBulletsIcon,
   PencilSimpleIcon,
   PlusIcon,
   TextAaIcon,
@@ -64,6 +65,7 @@ export function SidebarSection({
   hideMoreActions = false,
   createChannel,
   createSection,
+  importSections,
   newMessage,
   sort,
   filter,
@@ -99,6 +101,9 @@ export function SidebarSection({
     | undefined;
   newMessage?: (() => void) | undefined;
   createSection?:
+    | { available: boolean; open: (trigger: HTMLButtonElement) => void }
+    | undefined;
+  importSections?:
     | { available: boolean; open: (trigger: HTMLButtonElement) => void }
     | undefined;
   sort?:
@@ -398,6 +403,21 @@ export function SidebarSection({
                     </MenuIcon>
                     Create section
                   </MenuItem>
+                  {importSections && (
+                    <MenuItem
+                      disabled={!importSections.available}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        if (actionsTrigger.current)
+                          importSections.open(actionsTrigger.current);
+                      }}
+                    >
+                      <MenuIcon>
+                        <ListBulletsIcon size={14} />
+                      </MenuIcon>
+                      Import sections
+                    </MenuItem>
+                  )}
                 </>
               )}
               {move && (

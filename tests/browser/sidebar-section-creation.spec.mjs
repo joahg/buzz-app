@@ -22,7 +22,7 @@ test("Channels offers empty-section creation with keyboard focus and confirmed p
     page
       .getByRole("menu", { name: "More actions for Channels", exact: true })
       .getByRole("menuitem"),
-  ).toHaveText(["Filter", "Sort", "Create section"]);
+  ).toHaveText(["Filter", "Sort", "Create section", "Import sections"]);
   await page
     .getByRole("menuitem", { name: "Create section", exact: true })
     .click();

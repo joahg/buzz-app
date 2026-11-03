@@ -64,6 +64,7 @@ import {
 import { channelIcon } from "../channels/channel-icon";
 import { SidebarGroupIcon } from "../../bundled/channels/SidebarGroupIcon";
 import { CreateSidebarSection } from "../../bundled/channels/CreateSidebarSection";
+import { ImportSidebarSections } from "../../bundled/channels/ImportSidebarSections";
 import { useSidebarStartup } from "../../bundled/channels/useSidebarStartup";
 import { useChannelLabels } from "../../bundled/channels/useChannelLabels";
 import { useHiddenDms } from "../../bundled/channels/useHiddenDms";
@@ -278,6 +279,8 @@ export function ChannelInventory({
   const pendingCreate = useRef<ChannelSummary | undefined>(undefined);
   const [creatingSection, setCreatingSection] = useState(false);
   const createSectionTrigger = useRef<HTMLButtonElement>(null);
+  const [importingSections, setImportingSections] = useState(false);
+  const importSectionsTrigger = useRef<HTMLButtonElement>(null);
   const [creatingFor, setCreatingFor] = useState<{
     channel: ChannelSummary;
     surface?: ChannelMenuSurface;
@@ -1334,6 +1337,21 @@ export function ChannelInventory({
                     }
                   : undefined
               }
+              importSections={
+                section.key === "channels"
+                  ? {
+                      available:
+                        preferences.writable &&
+                        preferences.sectionCreationWritable,
+                      open: (trigger) => {
+                        importSectionsTrigger.current = trigger;
+                        requestAnimationFrame(() => {
+                          if (mounted.current) setImportingSections(true);
+                        });
+                      },
+                    }
+                  : undefined
+              }
               newMessage={
                 section.key === "dms"
                   ? () => {
@@ -1673,6 +1691,25 @@ export function ChannelInventory({
     ),
     dialogs: (
       <>
+        {importingSections && (
+          <ImportSidebarSections
+            channels={sidebarChannels.filter(
+              (channel) =>
+                !channel.archived &&
+                channel.channelType !== "dm" &&
+                channel.channelType !== "forum",
+            )}
+            sections={preferences.data?.sections ?? []}
+            starred={new Set(preferences.data?.starred)}
+            writable={
+              preferences.writable && preferences.sectionCreationWritable
+            }
+            createSection={preferences.createSection}
+            assign={preferences.assign}
+            finalFocus={importSectionsTrigger}
+            close={() => setImportingSections(false)}
+          />
+        )}
         {creatingSection && (
           <CreateSidebarSection
             writable={preferences.sectionCreationWritable}
