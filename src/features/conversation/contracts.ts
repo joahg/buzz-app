@@ -130,6 +130,9 @@ export type InlineRenderer = Readonly<{
     }
   >;
 }>;
+/** How a link appeared in the message source. */
+export type LinkWritten = "bare" | "angle" | "labeled";
+
 /** Link presentation only. The host retains the anchor, destination and activation. */
 export type LinkRenderer = Readonly<{
   id: string;
@@ -138,7 +141,19 @@ export type LinkRenderer = Readonly<{
   /** Claim strength when several renderers match a URL; see `MatchOrder`. */
   order?: MatchOrder | undefined;
   className?: string | undefined;
-  component: ComponentType<{ url: string }>;
+  /** `written` is how the author wrote the link: bare, in angle brackets, or
+   * with a label. Angle brackets mean no preview was asked for, so draw the link
+   * inline with no card. `messageId` names the message holding the link, absent
+   * outside one. `interactive` is false for a composer decoration or preview.
+   * `dismiss` is present only when the viewer may edit that message and the
+   * link can be rewritten to angle brackets; it publishes that single edit. */
+  component: ComponentType<{
+    url: string;
+    written: LinkWritten;
+    messageId?: string | undefined;
+    interactive: boolean;
+    dismiss?: (() => Promise<void>) | undefined;
+  }>;
 }>;
 /** Presentation for a fenced code block, chosen by its info-string language.
  * The host retains the frame and copy action; failure or removal restores the code. */

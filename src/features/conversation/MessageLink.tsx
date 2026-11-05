@@ -9,7 +9,11 @@ import {
   type MouseEvent,
 } from "react";
 import { resolveMatch, type Contribution } from "../../plugins/contributions";
-import type { ContributionReader, LinkRenderer } from "./contracts";
+import type {
+  ContributionReader,
+  LinkRenderer,
+  LinkWritten,
+} from "./contracts";
 import { ContributionBoundary, contributionKey } from "./ContributionBoundary";
 import {
   ContextMenuRoot,
@@ -39,9 +43,11 @@ import { safeLinkUrl } from "../relay/message-content";
 import {
   LinkChannelPrivateContext,
   LinkDescriptionContext,
+  LinkDismissContext,
   LinkInteractiveContext,
   LinkLabelContext,
   LinkContentContext,
+  LinkMessageIdContext,
   LinkPreviewContext,
   LinkThreadTabContext,
   type LinkPreview,
@@ -97,6 +103,8 @@ export function MessageLink({
   scope,
   interactive = true,
   channelPrivate = false,
+  written = "bare",
+  occurrence,
 }: {
   url: string;
   children?: ReactNode;
@@ -111,6 +119,9 @@ export function MessageLink({
   scope?: string | undefined;
   interactive?: boolean;
   channelPrivate?: boolean;
+  written?: LinkWritten;
+  /** Position among links to this URL; present only when `dismiss` may rewrite it. */
+  occurrence?: number | undefined;
 }) {
   const active = useConversationPresentation();
   const renderers = useSyncExternalStore(
@@ -199,6 +210,12 @@ export function MessageLink({
   if (!active && menuOpen) setMenuOpen(false);
   if (!active && notice) setNotice(undefined);
   const external = /^https?:\/\//i.test(url);
+  const dismissLink = useContext(LinkDismissContext);
+  const messageId = useContext(LinkMessageIdContext);
+  const dismiss =
+    interactive && dismissLink && occurrence !== undefined
+      ? () => dismissLink({ url, written, occurrence })
+      : undefined;
   const openThreadTab = useContext(LinkThreadTabContext);
   const thread =
     openThreadTab && destination?.messageId
@@ -306,7 +323,13 @@ export function MessageLink({
           ) : null}
         </span>
       ) : Content ? (
-        <Content url={url} />
+        <Content
+          url={url}
+          written={written}
+          messageId={messageId}
+          interactive={interactive}
+          dismiss={dismiss}
+        />
       ) : (
         (shown ?? display ?? url)
       );

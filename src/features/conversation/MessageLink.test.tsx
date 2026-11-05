@@ -531,6 +531,95 @@ it.each(["Session · 12345678", "Session: PR 45 fixes", "Chat: PR 45 fixes"])(
   },
 );
 
+const probe = vi.fn((_props: object) => <span>Probe face</span>);
+const probed = [{ ...entry, component: probe }];
+const probeRegistry = {
+  snapshot: () => probed,
+  subscribe: () => () => {},
+};
+const noInline: never[] = [];
+const none = { snapshot: () => noInline, subscribe: () => () => {} };
+const extensions = { links: probeRegistry, inline: none } as never;
+const messageRow = (extra: object = {}) => ({
+  id: "message",
+  channelId: "channel",
+  authorId: "author",
+  content: `See ${url}`,
+  createdAt: 1,
+  mentions: [],
+  attachments: [],
+  reactions: [],
+  replyCount: 0,
+  participants: [],
+  ...extra,
+});
+
+it.each([
+  ["See URL", "bare"],
+  ["See <URL>", "angle"],
+  ["See [URL](URL)", "labeled"],
+  ["See [the docs](URL)", "labeled"],
+])(
+  "tells a link renderer how %s was written, and its message",
+  (content, written) => {
+    probe.mockClear();
+    render(
+      <MessageMarkdown
+        row={messageRow({ content: content.replaceAll("URL", url) })}
+        extensions={extensions}
+        media={() => undefined}
+        onOpenLink={() => true}
+      />,
+    );
+    expect(probe).toHaveBeenLastCalledWith(
+      {
+        url,
+        written,
+        messageId: "message",
+        interactive: true,
+        dismiss: undefined,
+      },
+      undefined,
+    );
+  },
+);
+
+it("draws no link for a URL inside code", () => {
+  probe.mockClear();
+  render(
+    <MessageMarkdown
+      row={messageRow({ content: `\`${url}\`` })}
+      extensions={extensions}
+      media={() => undefined}
+      onOpenLink={() => true}
+    />,
+  );
+  expect(probe).not.toHaveBeenCalled();
+});
+
+it("names no message to a link renderer drawing a composer draft", () => {
+  probe.mockClear();
+  render(
+    <MessageMarkdown
+      row={messageRow()}
+      extensions={extensions}
+      media={() => undefined}
+      onOpenLink={() => true}
+      interactive={false}
+    />,
+  );
+  expect(probe).toHaveBeenLastCalledWith(
+    {
+      url,
+      written: "bare",
+      messageId: undefined,
+      interactive: false,
+      dismiss: undefined,
+    },
+    undefined,
+  );
+});
+
 it("shows escaped chosen names faithfully when only the sent label is available", () => {
   const name = "PR_45 & <fix> [draft] \\_notes";
   render(

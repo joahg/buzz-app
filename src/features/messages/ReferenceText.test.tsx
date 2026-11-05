@@ -37,6 +37,7 @@ function session(joined: readonly ChannelSummary[]) {
       viewer: "v".repeat(64),
       unread: undefined,
       channels,
+      profiles: { subscribe: () => () => {}, event: () => undefined },
     } as unknown as RelaySession,
     refer,
     directoryRead(channels: readonly ChannelSummary[]) {

@@ -1,4 +1,5 @@
 import { createContext, type ReactNode } from "react";
+import type { LinkWritten } from "./contracts";
 
 /** Optional host-resolved display label; presentation never resolves a destination. */
 export const LinkLabelContext = createContext<string | undefined>(undefined);
@@ -12,6 +13,22 @@ export const LinkChannelPrivateContext = createContext(false);
 /** Whether the link is live in a message, rather than a composer decoration or
  * preview: a renderer that reads anything for its link does so only then. */
 export const LinkInteractiveContext = createContext(true);
+
+/** The message that holds the link; absent outside a message, such as a draft. */
+export const LinkMessageIdContext = createContext<string | undefined>(
+  undefined,
+);
+
+/** Rewrites one link of the surrounding message to angle brackets, or is absent
+ * when the viewer may not edit that message. */
+export const LinkDismissContext = createContext<
+  | ((link: {
+      url: string;
+      written: LinkWritten;
+      occurrence: number;
+    }) => Promise<void>)
+  | undefined
+>(undefined);
 
 /** Sets the host anchor's description, such as a pull request's state, so a
  * renderer's status reaches assistive technology without joining the link's

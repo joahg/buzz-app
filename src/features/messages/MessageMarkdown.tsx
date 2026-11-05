@@ -14,6 +14,10 @@ import {
 import type { RelaySession } from "../relay/session";
 import type { ComposerSession } from "./composer-session";
 import { MessageLink } from "../conversation/MessageLink";
+import { LinkMessageIdContext } from "../conversation/LinkLabelContext";
+import { LinkDismissalScope } from "./LinkDismissalScope";
+import { remarkLinkForms } from "./link-forms";
+import type { LinkWritten } from "../conversation/contracts";
 import { parseBuzzLink } from "../navigation/buzz-links";
 import { messageLinkParts } from "./message-link-parts";
 import { labelText } from "./label-text";
@@ -532,22 +536,26 @@ export function MessageMarkdown({
       </div>
     );
   return (
-    <PreparedMessageMarkdown
-      row={row}
-      prepared={prepared}
-      directory={directory}
-      session={session}
-      scope={scope}
-      extensions={extensions}
-      media={media}
-      onOpenLink={onOpenLink}
-      canOpenLink={canOpenLink}
-      participantProfiles={participantProfiles}
-      resolveName={resolveName}
-      largeEmoji={largeEmoji}
-      interactive={interactive}
-      edited={edited}
-    />
+    <LinkMessageIdContext value={interactive ? row.id : undefined}>
+      <LinkDismissalScope row={row} session={session} interactive={interactive}>
+        <PreparedMessageMarkdown
+          row={row}
+          prepared={prepared}
+          directory={directory}
+          session={session}
+          scope={scope}
+          extensions={extensions}
+          media={media}
+          onOpenLink={onOpenLink}
+          canOpenLink={canOpenLink}
+          participantProfiles={participantProfiles}
+          resolveName={resolveName}
+          largeEmoji={largeEmoji}
+          interactive={interactive}
+          edited={edited}
+        />
+      </LinkDismissalScope>
+    </LinkMessageIdContext>
   );
 }
 
@@ -579,7 +587,12 @@ function PreparedMessageMarkdown({
     prepared.content === sourceRow.content
       ? sourceRow
       : { ...sourceRow, content: prepared.content };
-  const renderLink = (url: string, label?: string, children?: ReactNode) => {
+  const renderLink = (
+    url: string,
+    label?: string,
+    children?: ReactNode,
+    form?: { written: LinkWritten; occurrence?: number | undefined },
+  ) => {
     const channel = channelForLink(url, directory.channels);
     return (
       <MessageLink
@@ -593,6 +606,7 @@ function PreparedMessageMarkdown({
         scope={scope}
         interactive={interactive}
         channelPrivate={!!channel?.private}
+        {...form}
       >
         {children}
       </MessageLink>
@@ -734,7 +748,14 @@ function PreparedMessageMarkdown({
         />
       );
     },
-    a: ({ href: target, children }) => {
+    a: (props) => {
+      const { href: target, children } = props;
+      const written = props["data-link-written" as keyof typeof props] as
+        | LinkWritten
+        | undefined;
+      const position = Number(
+        props["data-link-occurrence" as keyof typeof props],
+      );
       const href =
         target &&
         (parseBuzzLink(target) ||
@@ -754,11 +775,19 @@ function PreparedMessageMarkdown({
           );
         return renderProfile(label.startsWith("@") ? label : `@${label}`, href);
       }
+      const plain = labelText(children) === href;
       return href ? (
         renderLink(
           href,
-          labelText(children) === href ? undefined : labelText(children),
-          labelText(children) === href ? undefined : children,
+          plain ? undefined : labelText(children),
+          plain ? undefined : children,
+          written && {
+            written,
+            occurrence:
+              written !== "angle" && (written === "bare" || plain)
+                ? position
+                : undefined,
+          },
         )
       ) : (
         <span>{children}</span>
@@ -903,6 +932,7 @@ const MarkdownBody = memo(function MarkdownBody({
           [remarkSpoilers, `<${protectedContent.prefix}spoiler\uE002>`],
           [remarkInlineContent, protectedContent],
           remarkLiteralHtml,
+          [remarkLinkForms, protectedContent.content],
         ],
         rehypePlugins: [rehypeEditedSlot],
         components: markdownComponents,

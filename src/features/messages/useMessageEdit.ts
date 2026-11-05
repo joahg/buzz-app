@@ -13,6 +13,7 @@ import type { ComposerSession } from "./composer-session";
 export function lastEditableMessage(
   session: ComposerSession,
   rows: readonly ChannelMessage[],
+  authorId = session.viewer,
 ): ChannelMessage | undefined {
   if (!session.viewer || !session.outbox?.supports(40003)) return;
   const pending = session.outbox.snapshot();
@@ -20,7 +21,7 @@ export function lastEditableMessage(
     .reverse()
     .find(
       (row) =>
-        row.authorId === session.viewer &&
+        row.authorId === authorId &&
         !row.membership &&
         !row.agentEnvelope &&
         !row.diff &&
