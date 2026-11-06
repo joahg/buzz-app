@@ -442,11 +442,13 @@ export function createMessages(
       edit(messageId, content, attachmentSourceId),
     /** Verified owner edit. Empty text removes the message, as in the composer.
      * As a guest it signs only once `profiles.owner` names the viewer; an
-     * earlier call fails delivery as read-only, and `retry(id)` resends it. */
+     * earlier call fails delivery as read-only, and `retry(id)` resends it.
+     * A function is evaluated after verification, so it can rebase on the
+     * message as it is when the edit is enqueued. */
     async editOwnedAgent(
       messageId: string,
-      content: string,
-      attachmentSourceId: string,
+      draft: string | (() => { content: string; attachmentSourceId: string }),
+      attachmentSourceId = "",
     ) {
       const original = find(messageId);
       if (!original || !viewer || !profiles)
@@ -464,8 +466,12 @@ export function createMessages(
       )
         throw new Error("Only an agent's verified owner can edit its messages");
       const authorization = { agentId: author, ownerId: viewer };
+      const { content, attachmentSourceId: source } =
+        typeof draft === "function"
+          ? draft()
+          : { content: draft, attachmentSourceId };
       return content.trim()
-        ? edit(messageId, content, attachmentSourceId, authorization)
+        ? edit(messageId, content, source, authorization)
         : remove([messageId], authorization);
     },
     react(messageId: string, content: string, emoji?: CustomEmoji) {

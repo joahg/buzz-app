@@ -5,6 +5,36 @@ import type { EventViewSnapshot, RelaySession } from "../relay/session";
 
 type ProfileView = ReturnType<RelaySession["observe"]>;
 const noSubscribe = () => () => {};
+
+/** One observation per session and author however many views read it, so a
+ * long thread of one agent's messages holds a single capacity slot. */
+const shared = new WeakMap<
+  RelaySession,
+  Map<string, { view: ProfileView; holders: number }>
+>();
+function acquire(session: RelaySession, pubkey: string) {
+  const views = shared.get(session) ?? new Map();
+  shared.set(session, views);
+  let entry = views.get(pubkey);
+  if (!entry) {
+    entry = {
+      view: session.observe([{ kinds: [0], authors: [pubkey], limit: 1 }]),
+      holders: 0,
+    };
+    views.set(pubkey, entry);
+  }
+  entry.holders += 1;
+  const held = entry;
+  return {
+    view: held.view,
+    release() {
+      held.holders -= 1;
+      if (held.holders > 0) return;
+      held.view.dispose();
+      if (views.get(pubkey) === held) views.delete(pubkey);
+    },
+  };
+}
 const pendingView = (): EventViewSnapshot => pendingSnapshot;
 const pendingSnapshot: EventViewSnapshot = Object.freeze({
   status: "loading",
@@ -34,15 +64,15 @@ export function useAgentOwnerEvidence(
       setView(null);
       return;
     }
-    let owned: ProfileView;
+    let owned: ReturnType<typeof acquire>;
     try {
-      owned = session.observe([{ kinds: [0], authors: [pubkey], limit: 1 }]);
+      owned = acquire(session, pubkey);
     } catch {
       setView(null);
       return;
     }
-    setView(owned);
-    return owned.dispose;
+    setView(owned.view);
+    return owned.release;
   }, [session, pubkey, attempt]);
   const events = useSyncExternalStore(
     view?.subscribe ?? noSubscribe,

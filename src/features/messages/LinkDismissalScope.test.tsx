@@ -72,7 +72,7 @@ async function ownerAuth(agent: Key, owner: Key) {
 type Author = "viewer" | "agent" | "stranger";
 type Evidence = "viewer" | "other" | "none" | "forged";
 
-async function fixture(author: Author, evidence: Evidence = "none") {
+async function fixture(author: Author, evidence: Evidence = "none", count = 1) {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -87,7 +87,11 @@ async function fixture(author: Author, evidence: Evidence = "none") {
     other = keypair();
   const writer = author === "viewer" ? viewer : agent;
   const authorKey = author === "stranger" ? stranger : writer;
-  const original = message(authorKey, "room", content, 1700000000);
+  const originals = Array.from({ length: count }, (_, index) =>
+    message(authorKey, "room", content, 1700000000 + index),
+  );
+  const original = originals[0];
+  assert.exists(original);
   const attested =
     evidence === "viewer"
       ? await ownerAuth(agent, viewer)
@@ -132,7 +136,7 @@ async function fixture(author: Author, evidence: Evidence = "none") {
           return filter.authors?.includes(agent.pubkey) ? [agentProfile] : [];
         if (filter.kinds?.includes(9))
           return [
-            original,
+            ...originals,
             bounds(relay, "room", "head", {
               has_more: false,
               next_cursor: null,
@@ -163,7 +167,7 @@ async function fixture(author: Author, evidence: Evidence = "none") {
   );
   owner.session.channels.ensure("room");
   await waitFor(() =>
-    expect(owner.session.channels.window("room").rows).toHaveLength(1),
+    expect(owner.session.channels.window("room").rows).toHaveLength(count),
   );
   function Surface() {
     const { rows } = useSyncExternalStore(
@@ -176,7 +180,7 @@ async function fixture(author: Author, evidence: Evidence = "none") {
           <MessageMarkdown
             key={row.id}
             row={row}
-            session={owner.session}
+            session={observed}
             extensions={extensions}
             media={() => undefined}
             onOpenLink={() => true}
@@ -186,12 +190,22 @@ async function fixture(author: Author, evidence: Evidence = "none") {
     );
   }
   faces.length = 0;
+  const observe = vi.fn(owner.session.observe);
+  const observed = Object.create(owner.session, {
+    observe: { value: observe },
+  }) as typeof owner.session;
   render(<Surface />);
+  const ownershipViews = () =>
+    observe.mock.calls.filter(([filters]) =>
+      filters.some((filter) => filter.kinds?.includes(0)),
+    ).length;
   const dismissals = () => faces.slice(-2).map((face) => face.dismiss);
   return {
     owner,
     published,
+    original,
     dismissals,
+    ownershipViews,
     async revoke() {
       agentProfile = eventDto(
         signed(agent, {
@@ -276,4 +290,69 @@ it.each([
   await waitFor(() => expect(faces.length).toBeGreaterThan(0));
   expect(faces.every((face) => face.dismiss === undefined)).toBe(true);
   expect(h.published).toHaveLength(0);
+});
+
+it("rewrites from the current text when a dismissal follows an edit", async () => {
+  const h = await fixture("viewer");
+  await waitFor(() => expect(faces.at(-2)?.dismiss).toBeDefined());
+  const [stale] = faces.slice(-2);
+  await act(async () => {
+    h.owner.session.messages.edit(
+      h.original.id,
+      `${content} again`,
+      h.original.id,
+    );
+  });
+  await waitFor(() => expect(h.published).toHaveLength(1));
+  await waitFor(() => expect(faces.at(-1)?.dismiss).toBeDefined());
+  await waitFor(async () => {
+    await act(async () => {
+      await stale?.dismiss?.();
+    });
+    expect(h.published).toHaveLength(2);
+  });
+  expect(edited(h.published[1])).toBe(`See <${url}> and ${url} again`);
+});
+
+it("keeps both dismissals when two follow each other", async () => {
+  const h = await fixture("viewer");
+  await waitFor(() => expect(faces.at(-2)?.dismiss).toBeDefined());
+  const [first, second] = faces.slice(-2);
+  await act(async () => {
+    await first?.dismiss?.();
+  });
+  await waitFor(async () => {
+    await act(async () => {
+      await second?.dismiss?.();
+    });
+    expect(h.published).toHaveLength(2);
+  });
+  expect(edited(h.published[0])).toBe(`See <${url}> and ${url}`);
+  expect(edited(h.published[1])).toBe(`See <${url}> and <${url}>`);
+});
+
+it("rejects a dismissal that starts while another is still being sent", async () => {
+  const h = await fixture("viewer");
+  await waitFor(() => expect(faces.at(-2)?.dismiss).toBeDefined());
+  const [first, second] = faces.slice(-2);
+  await act(async () => {
+    await first?.dismiss?.();
+    await expect(second?.dismiss?.()).rejects.toThrow();
+  });
+  await waitFor(() => expect(h.published).toHaveLength(1));
+  expect(edited(h.published[0])).toBe(`See <${url}> and ${url}`);
+});
+
+it("observes no ownership for a human author", async () => {
+  const h = await fixture("stranger");
+  await h.settled();
+  expect(h.ownershipViews()).toBe(0);
+});
+
+it("shares one ownership observation across an agent's rows", async () => {
+  const h = await fixture("agent", "viewer", 5);
+  await waitFor(() => expect(faces.at(-1)?.dismiss).toBeDefined());
+  await h.settled();
+  expect(faces.length).toBeGreaterThanOrEqual(10);
+  expect(h.ownershipViews()).toBe(1);
 });

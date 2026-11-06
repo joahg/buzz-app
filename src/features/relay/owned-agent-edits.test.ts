@@ -228,6 +228,22 @@ it.each(["member", "guest"])(
             .rows.find((row) => row.id === original.id)?.content,
         ).toBe("Spoken"),
       );
+      const before = published.length;
+      await expect(
+        connection.session.messages.editOwnedAgent(original.id, () => {
+          throw new Error("Changed while verifying");
+        }),
+      ).rejects.toThrow("Changed while verifying");
+      expect(published).toHaveLength(before);
+      const rebased = await connection.session.messages.editOwnedAgent(
+        original.id,
+        () => ({ content: "Rebased", attachmentSourceId: original.id }),
+      );
+      await vi.waitFor(() =>
+        expect(published.find((event) => event.id === rebased)?.content).toBe(
+          "Rebased",
+        ),
+      );
       const removed = await connection.session.messages.editOwnedAgent(
         original.id,
         "",
