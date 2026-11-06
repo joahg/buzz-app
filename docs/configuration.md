@@ -14,6 +14,7 @@ Build defaults are readable binary data, **never secret storage**.
 | `BUZZ_BUILDERLAB_URL` | Shared frontend/native build: the live development broker's Builderlab, and whether a build without an added sign-in server keeps the built-in one; no runtime override. See below. |
 | `BUZZ_BUILDERLAB_APPS_DOMAIN` | Shared frontend/native build: exact Apps cookie domain paired with the login origin for native viewer SSO; no runtime override. |
 | `BUZZ_BUILDERLAB_APPS_CONTROL_PLANE` | Shared frontend/native build: HTTPS origin of the Apps control plane for the configured login origin, for deployments the built-in public table does not list; no runtime override. |
+| `BUZZ_COMMUNITY_PLUGIN_INDEX_URL` | Shared frontend/native build: exact HTTPS origin of the community plugin index the bundled Community plugins page reads and reports to. Unset or empty means no index and no requests. See [below](#community-plugin-index). |
 | `BUZZ_BUILD_REPOSITORY_ACCESS` | Native build: default [repository access rules](repository-access.md#default-rules), in `repository-access.json`'s schema. Unset means none. |
 | `BUZZ_DEFAULT_COMMUNITY_URL` | Packaged frontend build: secure relay origin to select once, after identity setup, only when this viewer has no saved community record. Saved choices, including Personal space, always win. Unset in OSS builds. |
 | `BUZZ_DATABRICKS_HOST` | Frontend build and dev server: `https://` Databricks workspace URL passed as `DATABRICKS_HOST` to every bundled `goose-acp`, which then prefers it to the host in goose's config. Unset in OSS builds. See [Databricks host](#databricks-host). |
@@ -106,6 +107,23 @@ plugin starts receives it as `DATABRICKS_HOST`, so goose reports Databricks as
 configured and ignores a host saved in goose's config. Only the host is set:
 the model, thinking level and sign-in stay goose's own. Leave it unset for OSS
 builds.
+
+## Community plugin index
+
+The bundled Community plugins plugin (`buzz.community-plugins`, off by
+default) lists plugins people publish in public Git repositories, with install
+counts and upvotes from an index service. Set
+`BUZZ_COMMUNITY_PLUGIN_INDEX_URL` to that service's exact HTTPS origin (no
+path or trailing slash) in repository-root `.env.local` or the build process
+environment; the process wins, including empty. The native build grants the
+plugin that origin and `https://api.github.com`, and the page reads
+`<origin>/v1/index.json`. Unset or empty, the plugin gets no network access and
+shows "No community index configured". Any other value fails the build.
+
+Installs go through the usual plugin review. After a confirmed install of a
+listing whose repository GitHub reports as public, the plugin posts the listing
+and an anonymous per-device hash to `<origin>/v1/installs`; upvotes go to
+`<origin>/v1/votes`. People can turn both off on the page.
 
 ## Builderlab URL build input
 

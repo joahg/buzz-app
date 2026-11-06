@@ -16,6 +16,24 @@ const BUILDERLAB_APPS_DOMAIN_KEY: &str = "BUZZ_BUILDERLAB_APPS_DOMAIN";
 const BUILDERLAB_API_BASE_PATH_KEY: &str = "BUZZ_BUILDERLAB_API_BASE_PATH";
 const BUILDERLAB_APPS_CONTROL_PLANE_KEY: &str = "BUZZ_BUILDERLAB_APPS_CONTROL_PLANE";
 const REPOSITORY_ACCESS_KEY: &str = "BUZZ_BUILD_REPOSITORY_ACCESS";
+const COMMUNITY_PLUGIN_INDEX_KEY: &str = "BUZZ_COMMUNITY_PLUGIN_INDEX_URL";
+
+/// The community plugin index origin, or empty when the build has none.
+fn community_plugin_index(local: &Path, process: Option<String>) -> Result<String, &'static str> {
+    let values = build_env::load(local, &[COMMUNITY_PLUGIN_INDEX_KEY], |_| process.clone())?;
+    let Some(raw) = values
+        .get(COMMUNITY_PLUGIN_INDEX_KEY)
+        .filter(|raw| !raw.is_empty())
+        .cloned()
+    else {
+        return Ok(String::new());
+    };
+    let url = url::Url::parse(&raw).map_err(|_| "Invalid community plugin index URL")?;
+    if url.scheme() != "https" || url.origin().ascii_serialization() != raw {
+        return Err("Community plugin index URL must be an exact HTTPS origin");
+    }
+    Ok(raw)
+}
 
 /// Default repository access rules, in `repository-access.json`'s schema. Every rule
 /// must be usable, so a typo fails the build instead of dropping a rule. Cargo reads
@@ -168,6 +186,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed={BUILDERLAB_APPS_DOMAIN_KEY}");
     println!("cargo:rerun-if-env-changed={BUILDERLAB_APPS_CONTROL_PLANE_KEY}");
     println!("cargo:rerun-if-env-changed={REPOSITORY_ACCESS_KEY}");
+    println!("cargo:rerun-if-env-changed={COMMUNITY_PLUGIN_INDEX_KEY}");
     println!(
         "cargo:rerun-if-changed={}",
         root.join("crates/plugin-manager/src/access/schema.rs")
@@ -209,6 +228,9 @@ fn main() {
     let access = repository_access(process(REPOSITORY_ACCESS_KEY))
         .unwrap_or_else(|reason| panic!("Invalid {REPOSITORY_ACCESS_KEY}: {reason}"));
     println!("cargo:rustc-env={REPOSITORY_ACCESS_KEY}={access}");
+    let index = community_plugin_index(&local, process(COMMUNITY_PLUGIN_INDEX_KEY))
+        .unwrap_or_else(|reason| panic!("Invalid {COMMUNITY_PLUGIN_INDEX_KEY}: {reason}"));
+    println!("cargo:rustc-env={COMMUNITY_PLUGIN_INDEX_KEY}={index}");
 }
 
 #[cfg(test)]
@@ -237,6 +259,42 @@ mod tests {
             let selected = federated_identity(&local, env).map(|config| config.id);
             assert_eq!(selected.as_deref(), fi, "{mode}");
         }
+    }
+
+    #[test]
+    fn community_plugin_index_is_an_exact_https_origin_or_empty() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = directory.path().join(".env.local");
+        assert_eq!(community_plugin_index(&local, None).unwrap(), "");
+        assert_eq!(
+            community_plugin_index(&local, Some(String::new())).unwrap(),
+            ""
+        );
+        assert_eq!(
+            community_plugin_index(&local, Some("https://plugins.example".into())).unwrap(),
+            "https://plugins.example"
+        );
+        for raw in [
+            "http://plugins.example",
+            "https://plugins.example/",
+            "https://plugins.example/v1",
+            "https://user@plugins.example",
+            "plugins.example",
+        ] {
+            assert!(
+                community_plugin_index(&local, Some(raw.into())).is_err(),
+                "{raw}"
+            );
+        }
+        std::fs::write(
+            &local,
+            "BUZZ_COMMUNITY_PLUGIN_INDEX_URL=https://index.example\n",
+        )
+        .unwrap();
+        assert_eq!(
+            community_plugin_index(&local, None).unwrap(),
+            "https://index.example"
+        );
     }
 
     #[test]

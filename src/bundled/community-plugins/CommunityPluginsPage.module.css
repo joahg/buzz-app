@@ -1,0 +1,143 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.search {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+.alert,
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.alert > p,
+.notice > p {
+  margin: 0;
+  flex: 1 1 12rem;
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  outline: none;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-standard);
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--duration-state) var(--easing-state);
+}
+@media (hover: hover) and (pointer: fine) {
+  .row:hover {
+    background: var(--affordance-subtle-hover);
+  }
+}
+.row:active {
+  background: var(--affordance-subtle-pressed);
+}
+.rowText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.rowName,
+.rowTagline {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.rowMeta {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  text-align: end;
+}
+.votes {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 48rem;
+  overflow-wrap: anywhere;
+}
+.detailHeader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.detailHeader > *,
+.detail p,
+.section ul,
+.section ol {
+  margin: 0;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.flags {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.flags > li {
+  display: flex;
+  gap: var(--space-2);
+}
+.access {
+  padding-inline-start: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.command {
+  display: block;
+}
+.markdown > * {
+  margin-block: 0 var(--space-2);
+}

@@ -403,7 +403,20 @@ const BUILDERLAB_FI_ROUTES: &[&str] = &[
 ];
 /// The matching Builderlab API base path, or empty when unconfigured.
 pub const BUILDERLAB_API_BASE_PATH: &str = env!("BUZZ_BUILDERLAB_API_BASE_PATH");
+/// The build's community plugin index origin, or empty when it has none.
+pub const COMMUNITY_PLUGIN_INDEX_URL: &str = env!("BUZZ_COMMUNITY_PLUGIN_INDEX_URL");
 pub fn bundled_manifests() -> Vec<Manifest> {
+    let mut community_plugins: Manifest = serde_json::from_str(include_str!(
+        "../../../src/bundled/community-plugins/manifest.json"
+    ))
+    .expect("community plugins manifest");
+    community_plugins.host = (!COMMUNITY_PLUGIN_INDEX_URL.is_empty()).then(|| HostGrants {
+        network_origins: vec![
+            COMMUNITY_PLUGIN_INDEX_URL.into(),
+            "https://api.github.com".into(),
+        ],
+        ..HostGrants::default()
+    });
     let mut builderlab: Manifest = serde_json::from_str(include_str!(
         "../../../src/bundled/builderlab/manifest.json"
     ))
@@ -520,6 +533,7 @@ pub fn bundled_manifests() -> Vec<Manifest> {
         .expect("plugin development manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/focus/manifest.json"))
             .expect("focus manifest"),
+        community_plugins,
     ]
 }
 /// New bundles must opt in to the default-on policy.

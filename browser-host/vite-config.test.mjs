@@ -165,6 +165,27 @@ it("loads the broker's Vite config without native-compatibility warnings", () =>
               );
             }
             delete process.env.BUZZ_DATABRICKS_HOST;
+            for (const [origin, expected] of [
+              ['https://plugins.example', 'https://plugins.example'],
+              ['', ''],
+              [undefined, ''],
+            ]) {
+              if (origin === undefined) delete process.env.BUZZ_COMMUNITY_PLUGIN_INDEX_URL;
+              else process.env.BUZZ_COMMUNITY_PLUGIN_INDEX_URL = origin;
+              const result = await loadConfigFromFile({ command: 'build', mode: 'production' }, configFile);
+              assert.equal(
+                result.config.define['import.meta.env.VITE_BUZZ_COMMUNITY_PLUGIN_INDEX_URL'],
+                JSON.stringify(expected),
+              );
+            }
+            for (const invalid of ['http://plugins.example', 'https://plugins.example/', 'https://plugins.example/v1', 'plugins.example']) {
+              process.env.BUZZ_COMMUNITY_PLUGIN_INDEX_URL = invalid;
+              await assert.rejects(
+                loadConfigFromFile({ command: 'build', mode: 'production' }, configFile),
+                /Community plugin index URL/,
+              );
+            }
+            delete process.env.BUZZ_COMMUNITY_PLUGIN_INDEX_URL;
             // A fresh checkout uses production for both dev and packaged frontends.
             // Explicit empty values retain the deployment opt-out.
             for (const local of ['', 'BUZZ_BUILDERLAB_URL=']) {

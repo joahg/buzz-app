@@ -1,0 +1,10 @@
+{
+  "id": "buzz.community-plugins",
+  "name": "Community plugins",
+  "apiVersion": 1,
+  "description": "Find plugins people publish in public Git repositories, ranked by installs and upvotes, and add them to Buzz after reviewing their access.",
+  "discovery": {
+    "category": "developer-tools-and-integrations",
+    "tags": ["code"]
+  }
+}
