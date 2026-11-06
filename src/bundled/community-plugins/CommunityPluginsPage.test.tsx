@@ -90,6 +90,7 @@ it("explains a build without an index and makes no requests", async () => {
   expect(
     screen.queryByRole("button", { name: "Refresh community plugins" }),
   ).toBeNull();
+  expect(screen.queryByRole("button", { name: "Add your plugin" })).toBeNull();
   await userEvent.click(
     screen.getByRole("button", { name: "Open plugin settings" }),
   );
@@ -206,4 +207,92 @@ it("offers a retry when the install review closes without installing", async () 
     "The review closed before anything was installed.",
   );
   expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+});
+
+it("checks a repository, submits it, and opens it when already listed", async () => {
+  const { request } = setup();
+  request.mockImplementation(async ({ url }: { url: string }) => {
+    if (url === `${origin}/v1/index.json`)
+      return { status: 200, headers: {}, body: JSON.stringify(index) };
+    if (url === "https://api.github.com/repos/octo/popular")
+      return {
+        status: 200,
+        headers: {},
+        body: '{"private":false,"default_branch":"main"}',
+      };
+    if (url.endsWith("/manifest.json?ref=main"))
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify({
+          encoding: "base64",
+          content: btoa('{"id":"octo.popular","name":"Popular board"}'),
+        }),
+      };
+    if (url.endsWith("/plugin.js?ref=main"))
+      return { status: 200, headers: {}, body: "" };
+    if (url === `${origin}/v1/sources`)
+      return {
+        status: 200,
+        headers: {},
+        body: '{"status":"listed","listing":{"slug":"popular","name":"Popular board"}}',
+      };
+    return { status: 404, headers: {}, body: "" };
+  });
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Add your plugin" }),
+  );
+  const submit = screen.getByRole("button", { name: "Check and submit" });
+  expect(submit).toBeDisabled();
+  await userEvent.type(screen.getByLabelText("Repository"), "octo");
+  await userEvent.click(submit);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Enter a GitHub repository",
+  );
+  await userEvent.clear(screen.getByLabelText("Repository"));
+  await userEvent.type(
+    screen.getByLabelText("Repository"),
+    "https://github.com/octo/popular",
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Check and submit" }),
+  );
+  expect(
+    await screen.findByText("Popular board is already listed."),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("octo.popular · octo/popular @ main"),
+  ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "View listing" }));
+  expect(
+    screen.getByRole("heading", { name: "Popular board" }),
+  ).toBeInTheDocument();
+});
+
+it("shows why GitHub rejected a repository and sends nothing to the index", async () => {
+  const { request } = setup();
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Add your plugin" }),
+  );
+  request.mockResolvedValue({
+    status: 200,
+    headers: {},
+    body: '{"private":true}',
+  });
+  await userEvent.type(screen.getByLabelText("Repository"), "octo/secret");
+  await userEvent.click(
+    screen.getByRole("button", { name: "Check and submit" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "octo/secret is private. Only public repositories can be listed.",
+  );
+  expect(
+    request.mock.calls.some(([input]) => input.url === `${origin}/v1/sources`),
+  ).toBe(false);
+  await userEvent.click(
+    screen.getByRole("button", { name: "All community plugins" }),
+  );
+  expect(await screen.findAllByRole("button", { name: /^Open / })).toHaveLength(
+    2,
+  );
 });

@@ -125,6 +125,11 @@ listing whose repository GitHub reports as public, the plugin posts the listing
 and an anonymous per-device hash to `<origin>/v1/installs`; upvotes go to
 `<origin>/v1/votes`. People can turn both off on the page.
 
+**Add your plugin** on the page lets an author list a plugin. It checks
+anonymously through `https://api.github.com` that the repository is public and
+has a built `manifest.json` and `plugin.js`, then posts the repository, ref and
+folder to `<origin>/v1/sources`. It needs no other network access.
+
 ## Builderlab URL build input
 
 Builderlab is the build's first sign-in server below: its identity origin with

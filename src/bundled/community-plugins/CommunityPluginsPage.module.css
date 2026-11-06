@@ -141,3 +141,16 @@
 .markdown > * {
   margin-block: 0 var(--space-2);
 }
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.found {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-radius: var(--radius-control);
+  background: var(--surface-inset);
+}

@@ -20,8 +20,10 @@ import {
 } from "../../shared/design-system/icons/index";
 import { Button } from "../../shared/design-system/ui/Button";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
+import { Field } from "../../shared/design-system/ui/Field";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
+import { Input } from "../../shared/design-system/ui/Input";
 import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
 import { Panel } from "../../shared/design-system/ui/Panel";
 import {
@@ -56,6 +58,14 @@ import {
   setShareEnabled,
   shareEnabled,
 } from "./telemetry";
+import {
+  type CheckedSource,
+  checkSource,
+  describeSource,
+  parseSourceInput,
+  type SubmitResult,
+  submitSource,
+} from "./submit";
 import styles from "./CommunityPluginsPage.module.css";
 
 type Phase = "review" | "installed" | "updated" | "cancelled" | "unavailable";
@@ -92,6 +102,7 @@ export function CommunityPluginsPage({
   }>({ loading: !!origin && !!host });
   const [version, setVersion] = useState(0);
   const [selected, setSelected] = useState<string>();
+  const [adding, setAdding] = useState(false);
   const [phases, setPhases] = useState<ReadonlyMap<string, Phase>>(new Map());
   const [, setReports] = useState(0);
   const listRegion = useRef<HTMLElement>(null);
@@ -168,6 +179,24 @@ export function CommunityPluginsPage({
         description="This Buzz can't reach the community index."
       />
     );
+  else if (adding)
+    body = (
+      <AddPlugin
+        host={host}
+        origin={origin}
+        canOpen={(slug) =>
+          !!state.index?.plugins.some((item) => item.slug === slug)
+        }
+        onOpen={(slug) => {
+          setAdding(false);
+          setSelected(slug);
+        }}
+        onBack={() => {
+          setAdding(false);
+          requestAnimationFrame(() => listRegion.current?.focus());
+        }}
+      />
+    );
   else if (listing)
     body = (
       <Detail
@@ -189,6 +218,7 @@ export function CommunityPluginsPage({
         error={state.error}
         onRetry={() => setVersion((old) => old + 1)}
         onOpen={setSelected}
+        onAdd={() => setAdding(true)}
         regionRef={listRegion}
       />
     );
@@ -230,6 +260,7 @@ function Browse({
   error,
   onRetry,
   onOpen,
+  onAdd,
   regionRef,
 }: {
   index: Index | undefined;
@@ -237,6 +268,7 @@ function Browse({
   error: string | undefined;
   onRetry(): void;
   onOpen(slug: string): void;
+  onAdd(): void;
   regionRef: Ref<HTMLElement>;
 }) {
   const [query, setQuery] = useState("");
@@ -287,6 +319,7 @@ function Browse({
             },
           ]}
         />
+        <Button onClick={onAdd}>Add your plugin</Button>
       </div>
       <LoadingRegion
         pending={loading && !index}
@@ -654,6 +687,184 @@ function Detail({
           </ul>
         </section>
       )}
+    </article>
+  );
+}
+
+type AddState =
+  | { step: "idle" }
+  | { step: "invalid" }
+  | { step: "checking" }
+  | { step: "rejected"; message: string }
+  | { step: "submitting"; source: CheckedSource }
+  | { step: "failed"; source: CheckedSource; message: string }
+  | {
+      step: "done";
+      source: CheckedSource;
+      result: Extract<SubmitResult, { ok: true }>;
+    };
+
+function AddPlugin({
+  host,
+  origin,
+  canOpen,
+  onOpen,
+  onBack,
+}: {
+  host: Requester;
+  origin: string;
+  canOpen(slug: string): boolean;
+  onOpen(slug: string): void;
+  onBack(): void;
+}) {
+  const [repository, setRepository] = useState("");
+  const [ref, setRef] = useState("");
+  const [state, setState] = useState<AddState>({ step: "idle" });
+  const busy = state.step === "checking" || state.step === "submitting";
+  const run = async () => {
+    const input = parseSourceInput(repository, ref);
+    if (!input) return setState({ step: "invalid" });
+    setState({ step: "checking" });
+    const checked = await checkSource(host, input);
+    if (!checked.ok)
+      return setState({ step: "rejected", message: checked.message });
+    setState({ step: "submitting", source: checked.source });
+    const result = await submitSource(host, origin, checked.source);
+    setState(
+      result.ok
+        ? { step: "done", source: checked.source, result }
+        : { step: "failed", source: checked.source, message: result.message },
+    );
+  };
+  const found = "source" in state ? state.source : undefined;
+  const listedSlug =
+    state.step === "done" &&
+    state.result.status === "listed" &&
+    state.result.slug &&
+    canOpen(state.result.slug)
+      ? state.result.slug
+      : undefined;
+  const error =
+    state.step === "invalid"
+      ? "Enter a GitHub repository as owner/repo, owner/repo/folder or a github.com link."
+      : state.step === "rejected" || state.step === "failed"
+        ? state.message
+        : undefined;
+  return (
+    <article className={styles.detail} aria-label="Add your plugin">
+      <div>
+        <Button variant="plain" size="inline" onClick={onBack}>
+          <ArrowLeftIcon size="1rem" aria-hidden="true" />
+          All community plugins
+        </Button>
+      </div>
+      <header className={styles.detailHeader}>
+        <h2 className="text-heading">Add your plugin</h2>
+        <p className="text-body text-secondary">
+          List a Buzz plugin whose source is in a public GitHub repository.
+        </p>
+      </header>
+      <section className={styles.section}>
+        <ul className={styles.access}>
+          <li className="text-body-sm">
+            Commit the built <code className="text-mono-sm">manifest.json</code>{" "}
+            and <code className="text-mono-sm">plugin.js</code> on a branch or
+            tag, at the repository root or in a folder.
+          </li>
+          <li className="text-body-sm">
+            Optionally, add a{" "}
+            <code className="text-mono-sm">buzz-listing.yaml</code> next to them
+            with a tagline, description, category, tags and screenshots.
+          </li>
+        </ul>
+      </section>
+      <form
+        className={styles.form}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!busy) void run();
+        }}
+      >
+        <Field label="Repository">
+          <Input
+            value={repository}
+            placeholder="owner/repo or owner/repo/path/to/plugin"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            onChange={(event) => setRepository(event.target.value)}
+          />
+        </Field>
+        <Field label="Branch or tag" optional>
+          <Input
+            value={ref}
+            placeholder="Default branch"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoComplete="off"
+            onChange={(event) => setRef(event.target.value)}
+          />
+        </Field>
+        <div role="status" aria-live="polite" className={styles.form}>
+          {state.step === "checking" && (
+            <p className="text-body-sm text-secondary">
+              Checking that the repository is public and has a built plugin…
+            </p>
+          )}
+          {found && (
+            <div className={styles.found}>
+              <span className="text-label">{found.name}</span>
+              <span className="text-caption text-subtle">
+                {found.id} · {describeSource(found)} @ {found.ref}
+              </span>
+              {found.description && (
+                <span className="text-body-sm text-secondary">
+                  {found.description}
+                </span>
+              )}
+            </div>
+          )}
+          {state.step === "submitting" && (
+            <p className="text-body-sm text-secondary">
+              Found it. Sending it to the index…
+            </p>
+          )}
+          {state.step === "done" && (
+            <p className="text-body-sm">
+              {state.result.status === "listed"
+                ? `${state.result.name} is already listed.`
+                : `Submitted. ${state.result.name} will appear after the next index update.`}
+            </p>
+          )}
+        </div>
+        {error && (
+          <div role="alert" className={styles.notice} data-tone="warning">
+            <p className="text-body-sm">{error}</p>
+          </div>
+        )}
+        <p className="text-caption text-subtle">
+          Listings are unreviewed community content. Buzz still shows what a
+          plugin can access, and the exact commit, before anyone installs it.
+        </p>
+        <div className={styles.actions}>
+          {listedSlug ? (
+            <Button variant="prominent" onClick={() => onOpen(listedSlug)}>
+              View listing
+            </Button>
+          ) : state.step === "done" ? (
+            <Button onClick={onBack}>Done</Button>
+          ) : (
+            <Button
+              type="submit"
+              variant="prominent"
+              loading={busy}
+              disabled={!repository.trim()}
+            >
+              Check and submit
+            </Button>
+          )}
+        </div>
+      </form>
     </article>
   );
 }
