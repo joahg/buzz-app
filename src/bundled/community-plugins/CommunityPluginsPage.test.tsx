@@ -5,7 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PluginInstaller } from "../../plugins/installer";
 import { CommunityPluginsPage } from "./CommunityPluginsPage";
-import { listing, rawIndex } from "./testing";
+import { INSTALL_TYPE, recordId, VOTE_TYPE } from "./community-counts";
+import { fakeCommunity, listing, rawIndex } from "./testing";
 
 afterEach(() => {
   cleanup();
@@ -23,15 +24,45 @@ const popular = listing({
     ref: "main",
     commit: "b".repeat(40),
   },
-  installs: { allTime: 40, last24h: 0, last7d: 0 },
-  upvotes: 0,
 });
-const index = rawIndex([listing(), popular], {
-  allTime: [popular.key, listing().key],
-  mostUpvoted: [listing().key],
-});
+const index = rawIndex([listing(), popular]);
+const channel = "00000001-0000-4000-8000-000000000000";
+const others = ["b", "c", "d"].map((c) => c.repeat(64));
 
-function setup(installer?: PluginInstaller) {
+async function seeded() {
+  const community = fakeCommunity({
+    channels: [{ id: channel, creator: "a".repeat(64), createdAt: 1 }],
+  });
+  const put = async (
+    type: typeof INSTALL_TYPE | typeof VOTE_TYPE,
+    pubkey: string,
+    key: string,
+  ) =>
+    community.store.put({
+      pubkey,
+      kind: 45010,
+      created_at: 1,
+      content: JSON.stringify({ version: 1, on: true }),
+      tags: [
+        ["ar", "1"],
+        ["d", await recordId(channel, type, pubkey, key)],
+        ["h", channel],
+        ["type", type],
+        ["plugin", key],
+        ["op", "create"],
+      ],
+    });
+  for (const pubkey of others) await put(INSTALL_TYPE, pubkey, popular.key);
+  await put(INSTALL_TYPE, others[0] as string, listing().key);
+  await put(VOTE_TYPE, others[0] as string, listing().key);
+  return community;
+}
+
+async function setup(
+  installer?: PluginInstaller,
+  community?: ReturnType<typeof fakeCommunity>,
+) {
+  const relay = community ?? (await seeded());
   const request = vi.fn(async ({ url }: { url: string }) => {
     if (url === `${origin}/v1/index.json`)
       return { status: 200, headers: {}, body: JSON.stringify(index) };
@@ -45,10 +76,11 @@ function setup(installer?: PluginInstaller) {
       origin={origin}
       host={{ request }}
       installer={installer}
+      relay={relay.relay}
       openPluginSettings={openPluginSettings}
     />,
   );
-  return { request, openPluginSettings };
+  return { request, openPluginSettings, community: relay };
 }
 
 function fakeInstaller(
@@ -97,15 +129,17 @@ it("explains a build without an index and makes no requests", async () => {
   expect(openPluginSettings).toHaveBeenCalled();
 });
 
-it("lists plugins by installs with counts, and filters to a search", async () => {
-  setup();
-  const rows = await screen.findAllByRole("button", { name: /^Open / });
+it("lists plugins by installs in this community, and filters to a search", async () => {
+  await setup();
+  expect(
+    await screen.findByText("Installed by 3 people here"),
+  ).toBeInTheDocument();
+  const rows = screen.getAllByRole("button", { name: /^Open / });
   expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
     "Open Popular board",
     "Open Octo notes",
   ]);
-  expect(screen.getByText("Added by 40 people")).toBeInTheDocument();
-  expect(screen.getByText("4 upvotes")).toBeInTheDocument();
+  expect(screen.getByText("1 upvote")).toBeInTheDocument();
   await userEvent.type(
     screen.getByLabelText("Search community plugins"),
     "zzz",
@@ -143,17 +177,15 @@ it("shows a retry beside a failed index read", async () => {
   );
 });
 
-it("installs the indexed commit, counts it, then allows an upvote", async () => {
+it("installs the indexed commit, records it here, then allows an upvote", async () => {
   const installer = fakeInstaller("installed");
-  const { request } = setup(installer);
+  const { request, community } = await setup(installer);
+  await screen.findByText("Installed by 3 people here");
   await userEvent.click(
-    await screen.findByRole("button", { name: "Open Octo notes" }),
+    screen.getByRole("button", { name: "Open Octo notes" }),
   );
-  const upvote = screen.getByRole("button", { name: "Upvote" });
-  expect(upvote).toBeDisabled();
-  expect(
-    screen.getByText("Add it to Buzz from here to upvote it."),
-  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Upvote" })).toBeDisabled();
+  expect(screen.getByText("Install it to upvote it.")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Add to Buzz" }));
   expect(installer.requestInstall).toHaveBeenCalledWith({
     repository: "https://github.com/octo/notes-plugin",
@@ -164,41 +196,75 @@ it("installs the indexed commit, counts it, then allows an upvote", async () => 
     "Octo notes is installed and turned on.",
   );
   await waitFor(() =>
-    expect(request).toHaveBeenCalledWith(
-      expect.objectContaining({ url: `${origin}/v1/installs` }),
-    ),
-  );
-  await waitFor(() =>
     expect(screen.getByRole("button", { name: "Upvote" })).toBeEnabled(),
   );
+  expect(screen.getByText(/Installed by 2 people here/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Upvote" }));
   expect(
     await screen.findByRole("button", { name: "Upvoted" }),
   ).toHaveAttribute("aria-pressed", "true");
-  expect(screen.getByText("5 upvotes")).toBeInTheDocument();
+  expect(screen.getByText("2 upvotes")).toBeInTheDocument();
+  expect(community.publish).toHaveBeenCalledTimes(2);
+  expect(
+    request.mock.calls.every(
+      ([input]) => input.url === `${origin}/v1/index.json`,
+    ),
+  ).toBe(true);
 });
 
-it("sends no counts when sharing is turned off", async () => {
+it("withdraws the viewer's records and writes none while counting is off", async () => {
   const installer = fakeInstaller("installed");
-  const { request } = setup(installer);
-  await userEvent.click(
-    await screen.findByRole("switch", {
-      name: "Share anonymous install counts and upvotes",
-    }),
-  );
+  const community = await seeded();
+  await setup(installer, community);
+  await screen.findByText("Installed by 3 people here");
   await userEvent.click(
     screen.getByRole("button", { name: "Open Octo notes" }),
   );
   await userEvent.click(screen.getByRole("button", { name: "Add to Buzz" }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Upvote" })).toBeEnabled(),
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "All community plugins" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("switch", {
+      name: "Count my installs and upvotes in this community",
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByText("Installed by 1 person here")).toBeInTheDocument(),
+  );
+  const writes = community.publish.mock.calls.length;
+  await userEvent.click(
+    screen.getByRole("button", { name: "Open Octo notes" }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Reinstall" }));
   await screen.findByRole("status");
-  expect(request.mock.calls.map(([input]) => input.url)).toEqual([
-    `${origin}/v1/index.json`,
-  ]);
+  expect(screen.getByRole("button", { name: "Upvote" })).toBeDisabled();
+  expect(community.publish).toHaveBeenCalledTimes(writes);
+});
+
+it("hides counts when the community can't keep them", async () => {
+  await setup(
+    undefined,
+    fakeCommunity({ roster: [{ pubkey: "a".repeat(64), role: "member" }] }),
+  );
+  expect(
+    await screen.findByText(
+      "Plugin counts start once an owner or admin of this community opens Community plugins.",
+    ),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/Installed by/)).toBeNull();
+  await userEvent.click(
+    screen.getByRole("button", { name: "Open Octo notes" }),
+  );
+  expect(screen.queryByRole("button", { name: "Upvote" })).toBeNull();
 });
 
 it("offers a retry when the install review closes without installing", async () => {
   const installer = fakeInstaller("cancelled");
-  setup(installer);
+  await setup(installer);
   await userEvent.click(
     await screen.findByRole("button", { name: "Open Octo notes" }),
   );
@@ -210,7 +276,7 @@ it("offers a retry when the install review closes without installing", async () 
 });
 
 it("checks a repository, submits it, and opens it when already listed", async () => {
-  const { request } = setup();
+  const { request } = await setup();
   request.mockImplementation(async ({ url }: { url: string }) => {
     if (url === `${origin}/v1/index.json`)
       return { status: 200, headers: {}, body: JSON.stringify(index) };
@@ -270,7 +336,7 @@ it("checks a repository, submits it, and opens it when already listed", async ()
 });
 
 it("shows why GitHub rejected a repository and sends nothing to the index", async () => {
-  const { request } = setup();
+  const { request } = await setup();
   await userEvent.click(
     await screen.findByRole("button", { name: "Add your plugin" }),
   );

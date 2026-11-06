@@ -111,19 +111,27 @@ builds.
 ## Community plugin index
 
 The bundled Community plugins plugin (`buzz.community-plugins`, off by
-default) lists plugins people publish in public Git repositories, with install
-counts and upvotes from an index service. Set
-`BUZZ_COMMUNITY_PLUGIN_INDEX_URL` to that service's exact HTTPS origin (no
-path or trailing slash) in repository-root `.env.local` or the build process
-environment; the process wins, including empty. The native build grants the
-plugin that origin and `https://api.github.com`, and the page reads
+default) lists plugins people publish in public Git repositories from a public
+plugin index. Set `BUZZ_COMMUNITY_PLUGIN_INDEX_URL` to the index's exact HTTPS
+origin (no path or trailing slash) in repository-root `.env.local` or the build
+process environment; the process wins, including empty. The native build grants
+the plugin that origin and `https://api.github.com`, and the page reads
 `<origin>/v1/index.json`. Unset or empty, the plugin gets no network access and
 shows "No community index configured". Any other value fails the build.
 
-Installs go through the usual plugin review. After a confirmed install of a
-listing whose repository GitHub reports as public, the plugin posts the listing
-and an anonymous per-device hash to `<origin>/v1/installs`; upvotes go to
-`<origin>/v1/votes`. People can turn both off on the page.
+Installs go through the usual plugin review. Install counts and upvotes never
+go to the index: they stay in the selected community. Each community keeps them
+in one open NIP-CL system channel labeled `buzz-marketplace`, the oldest one
+that a community owner or admin created; the first owner or admin to open the
+page creates it. A member's install or upvote is one NIP-AR artifact there
+(type `buzz.plugin.install` or `buzz.plugin.vote`, the listing key in a
+`plugin` tag) whose `d` is derived from the member's key and the listing key, so
+the plugin counts each member once per plugin and an upvote only from someone
+who has it installed. Members joining to write is automatic. Counts are read
+from current revisions, so only that community's members see them, along with
+who installed what. People can turn counting off on the page, which withdraws
+their records. A community without a signed member list, NIP-CL or NIP-AR shows
+no counts.
 
 **Add your plugin** on the page lets an author list a plugin. It checks
 anonymously through `https://api.github.com` that the repository is public and

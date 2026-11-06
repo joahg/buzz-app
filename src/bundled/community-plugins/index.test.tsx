@@ -12,6 +12,10 @@ it("registers one primary workspace page and removes it on dispose", async () =>
   });
   const pages = new PagesService(ctx);
   provideNavigation(ctx, undefined);
+  ctx.provide("relay", {
+    snapshot: () => ({ status: "disconnected" }),
+    subscribe: () => () => {},
+  });
   ctx.provide("host", {
     request: async () => ({ status: 404, headers: {}, body: "" }),
   });

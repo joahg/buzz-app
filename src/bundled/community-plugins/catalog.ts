@@ -49,33 +49,22 @@ export type Listing = Readonly<{
   setup?: readonly SetupStep[];
   links?: Readonly<Record<string, string>>;
   updatedAt?: string;
-  installs: Readonly<{ allTime: number; last24h: number; last7d: number }>;
-  upvotes?: number;
-}>;
-export type Rankings = Readonly<{
-  allTime: readonly string[];
-  trending: readonly string[];
-  hot: readonly string[];
-  mostUpvoted: readonly string[];
 }>;
 export type Index = Readonly<{
   schemaVersion: 1;
   generatedAt: string;
-  collectionStartedAt: string;
   plugins: readonly Listing[];
-  rankings: Rankings;
 }>;
-export type Sort = keyof Rankings;
+export type Sort = "installs" | "upvotes" | "updated";
 
 export const categories: ReadonlyMap<string, string> = new Map(
   pluginCategoryDefinitions.map(({ id, label }) => [id, label]),
 );
 
 export const sorts: readonly Readonly<{ id: Sort; label: string }>[] = [
-  { id: "allTime", label: "All time" },
-  { id: "trending", label: "Trending" },
-  { id: "hot", label: "Hot" },
-  { id: "mostUpvoted", label: "Most upvoted" },
+  { id: "installs", label: "Most installed here" },
+  { id: "upvotes", label: "Most upvoted here" },
+  { id: "updated", label: "Recently updated" },
 ];
 
 const KEY =
@@ -95,8 +84,6 @@ export function parseKey(
 
 const text = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
-const count = (value: unknown) =>
-  Number.isSafeInteger(value) && (value as number) >= 0;
 const strings = (value: unknown) =>
   value === undefined || (Array.isArray(value) && value.every(text));
 const flag = (value: unknown) =>
@@ -112,7 +99,7 @@ function validListing(value: unknown): value is Listing {
   if (!listing || typeof listing !== "object") return false;
   const parts = typeof listing.key === "string" ? parseKey(listing.key) : null;
   if (!parts) return false;
-  const { host, audit, source, installs, demo } = listing;
+  const { host, audit, source, demo } = listing;
   return (
     /^[a-z0-9-]{1,120}$/.test(String(listing.slug)) &&
     /^[a-z][a-z0-9.-]{0,79}$/.test(String(listing.id)) &&
@@ -140,9 +127,8 @@ function validListing(value: unknown): value is Listing {
     Array.isArray(audit.flags) &&
     audit.flags.every((item) => text(item?.code) && text(item?.detail)) &&
     typeof audit.cleared === "boolean" &&
-    !!installs &&
-    [installs.allTime, installs.last24h, installs.last7d].every(count) &&
-    (listing.upvotes === undefined || count(listing.upvotes)) &&
+    (listing.updatedAt === undefined ||
+      typeof listing.updatedAt === "string") &&
     (demo === undefined ||
       (media(demo.video) &&
         media(demo.poster) &&
@@ -151,36 +137,6 @@ function validListing(value: unknown): value is Listing {
     (listing.links === undefined ||
       (!!listing.links && typeof listing.links === "object"))
   );
-}
-
-function sanitizeRankings(
-  value: unknown,
-  plugins: readonly Listing[],
-): Rankings {
-  const byKey = new Map(plugins.map((plugin) => [plugin.key, plugin]));
-  const listed = (name: Sort, eligible: (plugin: Listing) => boolean) => {
-    const raw = (value as Record<string, unknown> | undefined)?.[name];
-    const seen = new Set<string>();
-    for (const key of Array.isArray(raw) ? raw : []) {
-      const plugin = typeof key === "string" ? byKey.get(key) : undefined;
-      if (plugin && eligible(plugin)) seen.add(plugin.key);
-    }
-    return [...seen];
-  };
-  const allTime = listed("allTime", () => true);
-  const rest = plugins
-    .filter((plugin) => !allTime.includes(plugin.key))
-    .sort((a, b) => b.installs.allTime - a.installs.allTime)
-    .map((plugin) => plugin.key);
-  return {
-    allTime: [...allTime, ...rest],
-    trending: listed("trending", (plugin) => plugin.audit.cleared),
-    hot: listed("hot", (plugin) => plugin.audit.cleared),
-    mostUpvoted: listed(
-      "mostUpvoted",
-      (plugin) => plugin.audit.cleared && (plugin.upvotes ?? 0) > 0,
-    ),
-  };
 }
 
 export function parseIndex(value: unknown): Index | null {
@@ -203,15 +159,11 @@ export function parseIndex(value: unknown): Index | null {
   });
   if (raw.plugins.length && !plugins.length) return null;
   const generatedAt = Date.parse(String(raw.generatedAt));
-  const collectionStartedAt = Date.parse(String(raw.collectionStartedAt));
-  if (!Number.isFinite(generatedAt) || !Number.isFinite(collectionStartedAt))
-    return null;
+  if (!Number.isFinite(generatedAt)) return null;
   return {
     schemaVersion: 1,
     generatedAt: new Date(generatedAt).toISOString(),
-    collectionStartedAt: new Date(collectionStartedAt).toISOString(),
     plugins,
-    rankings: sanitizeRankings(raw.rankings, plugins),
   };
 }
 
@@ -231,9 +183,29 @@ export async function loadIndex(
   return index;
 }
 
-export function ranked(index: Index, sort: Sort): Listing[] {
-  const byKey = new Map(index.plugins.map((plugin) => [plugin.key, plugin]));
-  return index.rankings[sort].flatMap((key) => byKey.get(key) ?? []);
+const updated = (listing: Listing) => Date.parse(listing.updatedAt ?? "") || 0;
+
+/** The index's plugins in `sort` order. Without counts, installs and upvotes
+ * keep the index's own order. */
+export function ranked(
+  index: Index,
+  sort: Sort,
+  counts?: Readonly<{
+    installs(key: string): number;
+    upvotes(key: string): number;
+  }>,
+): Listing[] {
+  const order = new Map(index.plugins.map((plugin, at) => [plugin.key, at]));
+  const score = (listing: Listing) =>
+    sort === "updated"
+      ? updated(listing)
+      : sort === "installs"
+        ? (counts?.installs(listing.key) ?? 0)
+        : (counts?.upvotes(listing.key) ?? 0);
+  return [...index.plugins].sort(
+    (a, b) =>
+      score(b) - score(a) || (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0),
+  );
 }
 
 export function search(
@@ -277,16 +249,10 @@ export const tierLabels: Readonly<Record<AuditTier, string>> = {
   high: "High access",
 };
 
-export function installLine(listing: Listing, sort: Sort): string {
-  const { allTime, last24h, last7d } = listing.installs;
-  if (!allTime) return "New";
-  const added = `Added by ${allTime.toLocaleString("en-US")} ${allTime === 1 ? "person" : "people"}`;
-  if (sort === "trending" && last24h)
-    return `${added} · +${last24h.toLocaleString("en-US")} today`;
-  if (sort === "hot" && last7d)
-    return `${added} · +${last7d.toLocaleString("en-US")} this week`;
-  return added;
-}
+export const installLabel = (count: number) =>
+  count
+    ? `Installed by ${count.toLocaleString("en-US")} ${count === 1 ? "person" : "people"} here`
+    : "Not installed here yet";
 
 export const upvoteLabel = (count: number) =>
   `${count.toLocaleString("en-US")} ${count === 1 ? "upvote" : "upvotes"}`;

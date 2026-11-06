@@ -3,7 +3,7 @@ import type { PluginInstaller } from "../../plugins/installer";
 import { communityIndexOrigin } from "./config";
 import { CommunityPluginsPage } from "./CommunityPluginsPage";
 
-export const inject = ["pages", "navigation", "host"];
+export const inject = ["pages", "navigation", "host", "relay"];
 export const apply: PluginModule["apply"] = (ctx) => {
   const origin = communityIndexOrigin();
   const host = ctx.host;
@@ -26,6 +26,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
         origin={origin}
         host={host}
         installer={installer}
+        relay={ctx.relay}
         openPluginSettings={openPluginSettings}
       />
     ),

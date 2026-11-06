@@ -9,7 +9,10 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { Host } from "../../features/host/service";
+import { useIdentityNames } from "../../features/identity-names/react";
 import { SafeMarkdown } from "../../features/messages/SafeMarkdown";
+import type { RelayData } from "../../features/relay/service";
+import type { RelaySession } from "../../features/relay/session";
 import type { PluginInstaller } from "../../plugins/installer";
 import {
   ArrowLeftIcon,
@@ -39,7 +42,7 @@ import {
   categories,
   httpsUrl,
   type Index,
-  installLine,
+  installLabel,
   type Listing,
   loadIndex,
   ranked,
@@ -50,14 +53,9 @@ import {
   upvoteLabel,
 } from "./catalog";
 import {
-  canVote,
-  hasReported,
-  hasUpvoted,
-  reportInstall,
-  sendVote,
-  setShareEnabled,
-  shareEnabled,
-} from "./telemetry";
+  type CommunityCountsView,
+  useCommunityCounts,
+} from "./useCommunityCounts";
 import {
   type CheckedSource,
   checkSource,
@@ -86,13 +84,23 @@ export type CommunityPluginsPageProps = {
   origin: string;
   host: Requester | undefined;
   installer: PluginInstaller | undefined;
+  relay?: RelayData | undefined;
   openPluginSettings(): void;
+};
+
+const isInstalled = (installer: PluginInstaller | undefined, id: string) => {
+  try {
+    return installer?.getInstallationStatus(id) === "installed";
+  } catch {
+    return false;
+  }
 };
 
 export function CommunityPluginsPage({
   origin,
   host,
   installer,
+  relay,
   openPluginSettings,
 }: CommunityPluginsPageProps) {
   const [state, setState] = useState<{
@@ -104,8 +112,17 @@ export function CommunityPluginsPage({
   const [selected, setSelected] = useState<string>();
   const [adding, setAdding] = useState(false);
   const [phases, setPhases] = useState<ReadonlyMap<string, Phase>>(new Map());
-  const [, setReports] = useState(0);
   const listRegion = useRef<HTMLElement>(null);
+  const installed = useCallback(
+    (id: string) => isInstalled(installer, id),
+    [installer],
+  );
+  const counts = useCommunityCounts(
+    relay,
+    state.index?.plugins,
+    installed,
+    version,
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: Refresh and Retry read the index again.
   useEffect(() => {
@@ -147,10 +164,8 @@ export function CommunityPluginsPage({
       result = "unavailable";
     }
     set(result);
-    if (result === "installed" && host)
-      void reportInstall(host, origin, listing).then(() =>
-        setReports((count) => count + 1),
-      );
+    if (result === "installed" || result === "updated")
+      void counts.recordInstall(listing.key);
   };
 
   const listing = state.index?.plugins.find((item) => item.slug === selected);
@@ -201,8 +216,7 @@ export function CommunityPluginsPage({
     body = (
       <Detail
         listing={listing}
-        host={host}
-        origin={origin}
+        counts={counts}
         installer={installer}
         phase={phases.get(listing.slug)}
         onInstall={() => void install(listing)}
@@ -216,6 +230,7 @@ export function CommunityPluginsPage({
         index={state.index}
         loading={state.loading}
         error={state.error}
+        counts={counts}
         onRetry={() => setVersion((old) => old + 1)}
         onOpen={setSelected}
         onAdd={() => setAdding(true)}
@@ -258,6 +273,7 @@ function Browse({
   index,
   loading,
   error,
+  counts,
   onRetry,
   onOpen,
   onAdd,
@@ -266,6 +282,7 @@ function Browse({
   index: Index | undefined;
   loading: boolean;
   error: string | undefined;
+  counts: CommunityCountsView;
   onRetry(): void;
   onOpen(slug: string): void;
   onAdd(): void;
@@ -273,11 +290,19 @@ function Browse({
 }) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
-  const [sort, setSort] = useState<Sort>("allTime");
-  const [share, setShare] = useState(shareEnabled);
+  const [sort, setSort] = useState<Sort>("installs");
+  const [changing, setChanging] = useState(false);
+  const ready = counts.state.status === "ready";
   const visible = useMemo(
-    () => (index ? search(ranked(index, sort), query, category) : []),
-    [index, sort, query, category],
+    () =>
+      index
+        ? search(
+            ranked(index, sort, ready ? counts : undefined),
+            query,
+            category,
+          )
+        : [],
+    [index, sort, query, category, ready, counts],
   );
   const present = [...categories].filter(([id]) =>
     index?.plugins.some((plugin) => plugin.category === id),
@@ -345,7 +370,8 @@ function Browse({
             <Row
               key={listing.slug}
               listing={listing}
-              sort={sort}
+              installs={ready ? counts.installs(listing.key) : undefined}
+              upvotes={ready ? counts.upvotes(listing.key) : 0}
               onOpen={() => onOpen(listing.slug)}
             />
           ))}
@@ -356,11 +382,7 @@ function Browse({
               description={
                 filtered
                   ? "Try a different search or category."
-                  : sort === "mostUpvoted"
-                    ? "Nothing has upvotes yet. People who add a plugin from here can upvote it."
-                    : sort === "allTime"
-                      ? "No community plugins are listed yet."
-                      : "Trending and Hot include only cleared plugins with a few installs."
+                  : "No community plugins are listed yet."
               }
               action={
                 filtered && (
@@ -378,29 +400,35 @@ function Browse({
           )}
         </section>
       </LoadingRegion>
-      <SwitchPreferenceRow
-        label="Share anonymous install counts and upvotes"
-        description="Counts a plugin you add from here, and lets you upvote it, using a random identifier that stays on this device. Only public repositories are counted."
-        checked={share}
-        onCheckedChange={(on: boolean) => {
-          setShareEnabled(on);
-          setShare(on);
-        }}
-      />
+      {counts.state.status === "unavailable" ? (
+        <p className="text-caption text-subtle">{counts.state.message}</p>
+      ) : (
+        <SwitchPreferenceRow
+          label="Count my installs and upvotes in this community"
+          description="Members of this community can see that you installed and upvoted plugins. Nobody outside it can. Turning this off removes yours."
+          checked={counts.recording}
+          disabled={changing || !ready}
+          onCheckedChange={(on: boolean) => {
+            setChanging(true);
+            void counts.changeRecording(on).finally(() => setChanging(false));
+          }}
+        />
+      )}
     </>
   );
 }
 
 function Row({
   listing,
-  sort,
+  installs,
+  upvotes,
   onOpen,
 }: {
   listing: Listing;
-  sort: Sort;
+  installs: number | undefined;
+  upvotes: number;
   onOpen(): void;
 }) {
-  const upvotes = listing.upvotes ?? 0;
   return (
     <SurfaceButton
       className={styles.row}
@@ -420,7 +448,7 @@ function Row({
         </span>
       </span>
       <span className={`${styles.rowMeta} text-caption text-secondary`}>
-        <span>{installLine(listing, sort)}</span>
+        {installs !== undefined && <span>{installLabel(installs)}</span>}
         {upvotes > 0 && (
           <span className={styles.votes}>
             <ArrowUpIcon size="0.75rem" aria-hidden="true" />
@@ -458,8 +486,7 @@ function useInstalled(installer: PluginInstaller | undefined, id: string) {
 
 function Detail({
   listing,
-  host,
-  origin,
+  counts,
   installer,
   phase,
   onInstall,
@@ -467,8 +494,7 @@ function Detail({
   openPluginSettings,
 }: {
   listing: Listing;
-  host: Requester;
-  origin: string;
+  counts: CommunityCountsView;
   installer: PluginInstaller | undefined;
   phase: Phase | undefined;
   onInstall(): void;
@@ -476,26 +502,24 @@ function Detail({
   openPluginSettings(): void;
 }) {
   const installed = useInstalled(installer, listing.id);
-  const [voted, setVoted] = useState(() => hasUpvoted(listing.key));
-  const [baseline] = useState(voted);
   const [voting, setVoting] = useState(false);
-  const upvotes = Math.max(
-    0,
-    (listing.upvotes ?? 0) + Number(voted) - Number(baseline),
-  );
-  const voteBlocked =
-    !installed || !hasReported(listing.key)
-      ? "Add it to Buzz from here to upvote it."
-      : !shareEnabled()
-        ? "Turn on anonymous sharing on the plugin list to upvote."
+  const [voteFailed, setVoteFailed] = useState(false);
+  const ready = counts.state.status === "ready";
+  const voted = counts.voted(listing.key);
+  const upvotes = counts.upvotes(listing.key);
+  const voteBlocked = !ready
+    ? undefined
+    : !counts.recording
+      ? "Turn on counting on the plugin list to upvote."
+      : !installed || !counts.mine(listing.key)
+        ? "Install it to upvote it."
         : undefined;
   const toggleVote = () => {
-    if (voting || !canVote(listing)) return;
-    const next = !voted;
-    setVoted(next);
+    if (voting || voteBlocked) return;
     setVoting(true);
-    void sendVote(host, origin, listing, next).then((ok) => {
-      if (!ok) setVoted(!next);
+    setVoteFailed(false);
+    void counts.vote(listing.key, !voted).then((ok) => {
+      setVoteFailed(!ok);
       setVoting(false);
     });
   };
@@ -522,8 +546,8 @@ function Detail({
           <p className="text-body text-secondary">{listing.tagline}</p>
         )}
         <p className="text-caption text-subtle">
-          {listing.author.github} · {trustLabel(listing)} ·{" "}
-          {installLine(listing, "allTime")}
+          {listing.author.github} · {trustLabel(listing)}
+          {ready ? ` · ${installLabel(counts.installs(listing.key))}` : ""}
         </p>
       </header>
       <div className={styles.actions}>
@@ -538,21 +562,30 @@ function Detail({
         ) : (
           <Button onClick={openPluginSettings}>Add from Settings</Button>
         )}
-        <Button
-          aria-pressed={voted}
-          disabled={!!voteBlocked}
-          loading={voting}
-          title={voteBlocked}
-          onClick={toggleVote}
-        >
-          <ArrowUpIcon size="1rem" aria-hidden="true" />
-          {voted ? "Upvoted" : "Upvote"}
-        </Button>
-        <span className="text-caption text-secondary">
-          {upvotes ? upvoteLabel(upvotes) : "No upvotes yet"}
-        </span>
+        {ready && (
+          <>
+            <Button
+              aria-pressed={voted}
+              disabled={!!voteBlocked}
+              loading={voting}
+              title={voteBlocked}
+              onClick={toggleVote}
+            >
+              <ArrowUpIcon size="1rem" aria-hidden="true" />
+              {voted ? "Upvoted" : "Upvote"}
+            </Button>
+            <span className="text-caption text-secondary">
+              {upvotes ? upvoteLabel(upvotes) : "No upvotes here yet"}
+            </span>
+          </>
+        )}
       </div>
       {voteBlocked && <p className="text-caption text-subtle">{voteBlocked}</p>}
+      {voteFailed && (
+        <p role="alert" className="text-caption text-subtle">
+          Buzz couldn't save your upvote. Try again.
+        </p>
+      )}
       {phase && phase !== "review" && (
         <div
           role={failure ? "alert" : "status"}
@@ -584,6 +617,12 @@ function Detail({
           {listing.source.path ? `, folder ${listing.source.path}` : ""}. Check
           that Buzz shows commit {listing.source.commit} before installing.
         </p>
+      )}
+      {ready && counts.session && (
+        <Installers
+          session={counts.session}
+          pubkeys={counts.installers(listing.key)}
+        />
       )}
       <section className={styles.section}>
         <InlineHeader title="Audit" />
@@ -688,6 +727,39 @@ function Detail({
         </section>
       )}
     </article>
+  );
+}
+
+/** Names shown before the rest are summarized. */
+const SHOWN_INSTALLERS = 12;
+
+function Installers({
+  session,
+  pubkeys,
+}: {
+  session: RelaySession;
+  pubkeys: readonly string[];
+}) {
+  const name = useIdentityNames(session.names);
+  const shown = pubkeys.slice(0, SHOWN_INSTALLERS);
+  const key = shown.join(",");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` stands for `shown`.
+  useEffect(() => {
+    if (shown.length)
+      void session.profiles.ensure(shown, "background").catch(() => {});
+  }, [session, key]);
+  if (!pubkeys.length) return null;
+  const rest = pubkeys.length - shown.length;
+  return (
+    <section className={styles.section}>
+      <InlineHeader title="Installed here by" />
+      <p className="text-body-sm">
+        {shown
+          .map((pubkey) => name(pubkey, `${pubkey.slice(0, 8)}…`))
+          .join(", ")}
+        {rest > 0 ? ` and ${rest.toLocaleString("en-US")} more` : ""}
+      </p>
+    </section>
   );
 }
 

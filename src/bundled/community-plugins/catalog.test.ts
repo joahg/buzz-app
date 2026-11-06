@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import {
   accessSummary,
-  installLine,
+  installLabel,
   loadIndex,
   parseIndex,
   ranked,
@@ -9,46 +9,56 @@ import {
 } from "./catalog";
 import { listing, rawIndex } from "./testing";
 
-it("keeps only valid listings and drops rankings for ineligible ones", () => {
+it("keeps only valid listings, once each", () => {
   const good = listing();
-  const uncleared = listing({
+  const other = listing({
     key: "github.com/octo/other",
     slug: "github-com--octo--other",
     id: "octo.other",
     source: { ...good.source, repository: "https://github.com/octo/other" },
-    audit: { tier: "high", flags: [], cleared: false },
   });
   const index = parseIndex(
-    rawIndex(
-      [
-        good,
-        uncleared,
-        { ...good, slug: "duplicate" },
-        { ...good, key: "gitlab.com/x/y", slug: "elsewhere" },
-        { ...good, key: "github.com/block/x", slug: "fake-official" },
-      ],
-      {
-        allTime: [uncleared.key],
-        trending: [uncleared.key, good.key, "github.com/missing/plugin"],
-        hot: [good.key],
-        mostUpvoted: [uncleared.key, good.key],
-      },
-    ),
+    rawIndex([
+      good,
+      other,
+      { ...good, slug: "duplicate" },
+      { ...good, key: "gitlab.com/x/y", slug: "elsewhere" },
+      { ...good, key: "github.com/block/x", slug: "fake-official" },
+    ]),
   );
   expect(index?.plugins.map((plugin) => plugin.slug)).toEqual([
     good.slug,
-    uncleared.slug,
+    other.slug,
   ]);
-  expect(index?.rankings).toEqual({
-    allTime: [uncleared.key, good.key],
-    trending: [good.key],
-    hot: [good.key],
-    mostUpvoted: [good.key],
+});
+
+it("orders by community counts, then by the index's own order", () => {
+  const a = listing({
+    key: "github.com/octo/a",
+    slug: "a",
+    updatedAt: "2026-01-01T00:00:00Z",
   });
-  if (!index) throw new Error("expected an index");
-  expect(ranked(index, "trending").map((plugin) => plugin.id)).toEqual([
-    "octo.notes",
-  ]);
+  const b = listing({
+    key: "github.com/octo/b",
+    slug: "b",
+    updatedAt: "2026-03-01T00:00:00Z",
+  });
+  const c = listing({ key: "github.com/octo/c", slug: "c" });
+  const index = {
+    schemaVersion: 1 as const,
+    generatedAt: "",
+    plugins: [a, b, c],
+  };
+  const counts = {
+    installs: (key: string) => (key === c.key ? 3 : key === b.key ? 1 : 0),
+    upvotes: (key: string) => (key === a.key ? 2 : 0),
+  };
+  const slugs = (sort: "installs" | "upvotes" | "updated", withCounts = true) =>
+    ranked(index, sort, withCounts ? counts : undefined).map((p) => p.slug);
+  expect(slugs("installs")).toEqual(["c", "b", "a"]);
+  expect(slugs("upvotes")).toEqual(["a", "b", "c"]);
+  expect(slugs("updated")).toEqual(["b", "a", "c"]);
+  expect(slugs("installs", false)).toEqual(["a", "b", "c"]);
 });
 
 it("rejects an index whose listings are all invalid or whose schema is unknown", () => {
@@ -65,16 +75,9 @@ it("searches names, taglines, authors and tags within a category", () => {
 });
 
 it("summarizes counts and access in plain language", () => {
-  expect(installLine(listing(), "allTime")).toBe("Added by 12 people");
-  expect(installLine(listing(), "trending")).toBe(
-    "Added by 12 people · +2 today",
-  );
-  expect(
-    installLine(
-      listing({ installs: { allTime: 0, last24h: 0, last7d: 0 } }),
-      "hot",
-    ),
-  ).toBe("New");
+  expect(installLabel(12)).toBe("Installed by 12 people here");
+  expect(installLabel(1)).toBe("Installed by 1 person here");
+  expect(installLabel(0)).toBe("Not installed here yet");
   expect(
     accessSummary({ networkOrigins: ["https://api.example"], files: true }),
   ).toEqual(["Connect to api.example", "Read files with your access"]);
