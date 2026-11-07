@@ -64,6 +64,7 @@ import {
   type SubmitResult,
   submitSource,
 } from "./submit";
+import type { Recorder } from "./recorder";
 import styles from "./CommunityPluginsPage.module.css";
 
 type Phase = "review" | "installed" | "updated" | "cancelled" | "unavailable";
@@ -85,15 +86,8 @@ export type CommunityPluginsPageProps = {
   host: Requester | undefined;
   installer: PluginInstaller | undefined;
   relay?: RelayData | undefined;
+  recorder?: Recorder | undefined;
   openPluginSettings(): void;
-};
-
-const isInstalled = (installer: PluginInstaller | undefined, id: string) => {
-  try {
-    return installer?.getInstallationStatus(id) === "installed";
-  } catch {
-    return false;
-  }
 };
 
 export function CommunityPluginsPage({
@@ -101,6 +95,7 @@ export function CommunityPluginsPage({
   host,
   installer,
   relay,
+  recorder,
   openPluginSettings,
 }: CommunityPluginsPageProps) {
   const [state, setState] = useState<{
@@ -113,16 +108,7 @@ export function CommunityPluginsPage({
   const [adding, setAdding] = useState(false);
   const [phases, setPhases] = useState<ReadonlyMap<string, Phase>>(new Map());
   const listRegion = useRef<HTMLElement>(null);
-  const installed = useCallback(
-    (id: string) => isInstalled(installer, id),
-    [installer],
-  );
-  const counts = useCommunityCounts(
-    relay,
-    state.index?.plugins,
-    installed,
-    version,
-  );
+  const counts = useCommunityCounts(relay, recorder, version);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: Refresh and Retry read the index again.
   useEffect(() => {
@@ -164,8 +150,7 @@ export function CommunityPluginsPage({
       result = "unavailable";
     }
     set(result);
-    if (result === "installed" || result === "updated")
-      void counts.recordInstall(listing.key);
+    if (result === "installed" || result === "updated") void recorder?.sync();
   };
 
   const listing = state.index?.plugins.find((item) => item.slug === selected);
@@ -370,8 +355,8 @@ function Browse({
             <Row
               key={listing.slug}
               listing={listing}
-              installs={ready ? counts.installs(listing.key) : undefined}
-              upvotes={ready ? counts.upvotes(listing.key) : 0}
+              installs={ready ? counts.installs(listing.id) : undefined}
+              upvotes={ready ? counts.upvotes(listing.id) : 0}
               onOpen={() => onOpen(listing.slug)}
             />
           ))}
@@ -404,8 +389,8 @@ function Browse({
         <p className="text-caption text-subtle">{counts.state.message}</p>
       ) : (
         <SwitchPreferenceRow
-          label="Count my installs and upvotes in this community"
-          description="Members of this community can see that you installed and upvoted plugins. Nobody outside it can. Turning this off removes yours."
+          label="Record my plugins in this community"
+          description="Members of this community can see which plugins you installed and liked. Nobody outside it can. Turning this off removes yours."
           checked={counts.recording}
           disabled={changing || !ready}
           onCheckedChange={(on: boolean) => {
@@ -505,20 +490,20 @@ function Detail({
   const [voting, setVoting] = useState(false);
   const [voteFailed, setVoteFailed] = useState(false);
   const ready = counts.state.status === "ready";
-  const voted = counts.voted(listing.key);
-  const upvotes = counts.upvotes(listing.key);
+  const voted = counts.voted(listing.id);
+  const upvotes = counts.upvotes(listing.id);
   const voteBlocked = !ready
     ? undefined
     : !counts.recording
-      ? "Turn on counting on the plugin list to upvote."
-      : !installed || !counts.mine(listing.key)
+      ? "Turn on recording on the plugin list to upvote."
+      : !installed || !counts.mine(listing.id)
         ? "Install it to upvote it."
         : undefined;
   const toggleVote = () => {
     if (voting || voteBlocked) return;
     setVoting(true);
     setVoteFailed(false);
-    void counts.vote(listing.key, !voted).then((ok) => {
+    void counts.vote(listing.id, !voted).then((ok) => {
       setVoteFailed(!ok);
       setVoting(false);
     });
@@ -547,7 +532,7 @@ function Detail({
         )}
         <p className="text-caption text-subtle">
           {listing.author.github} · {trustLabel(listing)}
-          {ready ? ` · ${installLabel(counts.installs(listing.key))}` : ""}
+          {ready ? ` · ${installLabel(counts.installs(listing.id))}` : ""}
         </p>
       </header>
       <div className={styles.actions}>
@@ -621,7 +606,7 @@ function Detail({
       {ready && counts.session && (
         <Installers
           session={counts.session}
-          pubkeys={counts.installers(listing.key)}
+          pubkeys={counts.installers(listing.id)}
         />
       )}
       <section className={styles.section}>

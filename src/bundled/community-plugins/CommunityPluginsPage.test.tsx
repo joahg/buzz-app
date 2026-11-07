@@ -6,10 +6,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { PluginInstaller } from "../../plugins/installer";
 import { CommunityPluginsPage } from "./CommunityPluginsPage";
 import { INSTALL_TYPE, recordId, VOTE_TYPE } from "./community-counts";
+import { createRecorder, type Recorder } from "./recorder";
 import { fakeCommunity, listing, rawIndex } from "./testing";
 
+const recorders: Recorder[] = [];
 afterEach(() => {
   cleanup();
+  for (const recorder of recorders.splice(0)) recorder.stop();
   window.localStorage.clear();
 });
 
@@ -52,9 +55,9 @@ async function seeded() {
         ["op", "create"],
       ],
     });
-  for (const pubkey of others) await put(INSTALL_TYPE, pubkey, popular.key);
-  await put(INSTALL_TYPE, others[0] as string, listing().key);
-  await put(VOTE_TYPE, others[0] as string, listing().key);
+  for (const pubkey of others) await put(INSTALL_TYPE, pubkey, popular.id);
+  await put(INSTALL_TYPE, others[0] as string, listing().id);
+  await put(VOTE_TYPE, others[0] as string, listing().id);
   return community;
 }
 
@@ -71,12 +74,34 @@ async function setup(
     return { status: 202, headers: {}, body: "{}" };
   });
   const openPluginSettings = vi.fn();
+  const recorder = createRecorder({
+    relay: relay.relay,
+    delayMs: 0,
+    inventory: {
+      installed: () =>
+        installer?.getInstallationStatus(listing().id) === "installed"
+          ? [
+              {
+                id: listing().id,
+                source: {
+                  repository: listing().source.repository,
+                  path: "",
+                  commit: listing().source.commit,
+                },
+              },
+            ]
+          : [],
+      subscribe: () => () => {},
+    },
+  });
+  recorders.push(recorder);
   render(
     <CommunityPluginsPage
       origin={origin}
       host={{ request }}
       installer={installer}
       relay={relay.relay}
+      recorder={recorder}
       openPluginSettings={openPluginSettings}
     />,
   );
@@ -212,7 +237,7 @@ it("installs the indexed commit, records it here, then allows an upvote", async 
   ).toBe(true);
 });
 
-it("withdraws the viewer's records and writes none while counting is off", async () => {
+it("withdraws the viewer's records and writes none while recording is off", async () => {
   const installer = fakeInstaller("installed");
   const community = await seeded();
   await setup(installer, community);
@@ -229,7 +254,7 @@ it("withdraws the viewer's records and writes none while counting is off", async
   );
   await userEvent.click(
     await screen.findByRole("switch", {
-      name: "Count my installs and upvotes in this community",
+      name: "Record my plugins in this community",
     }),
   );
   await waitFor(() =>
@@ -246,15 +271,14 @@ it("withdraws the viewer's records and writes none while counting is off", async
 });
 
 it("hides counts when the community can't keep them", async () => {
-  await setup(
-    undefined,
-    fakeCommunity({ roster: [{ pubkey: "a".repeat(64), role: "member" }] }),
-  );
+  const community = fakeCommunity();
+  delete (community.session as unknown as { snapshotRead?: unknown })
+    .snapshotRead;
+  await setup(undefined, community);
   expect(
-    await screen.findByText(
-      "Plugin counts start once an owner or admin of this community opens Community plugins.",
-    ),
+    await screen.findByText("This community can't keep plugin counts."),
   ).toBeInTheDocument();
+  expect(community.create).not.toHaveBeenCalled();
   expect(screen.queryByText(/Installed by/)).toBeNull();
   await userEvent.click(
     screen.getByRole("button", { name: "Open Octo notes" }),

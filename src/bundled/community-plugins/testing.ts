@@ -41,16 +41,22 @@ type Event = {
 const first = (event: { tags: string[][] }, name: string) =>
   event.tags.find((t) => t[0] === name)?.[1];
 
-/** An in-memory community: a signed roster, NIP-CL channel lookups and a
- * NIP-AR store holding each `d`'s current revision. */
+type FakeChannel = {
+  id: string;
+  creator: string;
+  createdAt: number;
+  private?: boolean;
+  archived?: boolean;
+};
+
+/** An in-memory community: NIP-CL system channel lookups and a NIP-AR store
+ * holding each `d`'s current revision. */
 export function fakeCommunity({
   viewer = "a".repeat(64),
-  roster = [{ pubkey: "a".repeat(64), role: "owner" }],
-  channels = [] as Array<{ id: string; creator: string; createdAt: number }>,
+  channels = [] as FakeChannel[],
 }: {
   viewer?: string;
-  roster?: Array<{ pubkey: string; role: string }> | null;
-  channels?: Array<{ id: string; creator: string; createdAt: number }>;
+  channels?: FakeChannel[];
 } = {}) {
   const relayAuthor = "9".repeat(64);
   const heads = new Map<string, Event>();
@@ -102,40 +108,27 @@ export function fakeCommunity({
     return id;
   });
   const join = vi.fn(async () => {});
+  const findSystemLabeled = vi.fn(async (label: string) =>
+    made
+      .map((channel) => ({
+        id: channel.id,
+        name: "Community plugins",
+        channelType: "system",
+        creator: channel.creator,
+        createdAt: channel.createdAt,
+        labels: [label === "buzz-marketplace" ? label : "other"],
+        ...(channel.private ? { private: true } : {}),
+        ...(channel.archived ? { archived: true } : {}),
+      }))
+      .filter((channel) => channel.labels.includes(label))
+      .sort((a, b) => a.createdAt - b.createdAt),
+  );
   const session = {
     viewer,
     relayAuthor,
     snapshotRead,
     configArtifactWriter: { sign, publish },
-    read: vi.fn(async () =>
-      roster
-        ? [
-            {
-              id: "r".repeat(64),
-              pubkey: relayAuthor,
-              kind: 13534,
-              created_at: 1,
-              content: "",
-              sig: "",
-              tags: roster.map(({ pubkey, role }) => ["member", pubkey, role]),
-            },
-          ]
-        : [],
-    ),
-    channels: {
-      findLabeled: vi.fn(async ({ creator }: { creator: string }) =>
-        made
-          .filter((channel) => channel.creator === creator)
-          .map((channel) => ({
-            id: channel.id,
-            name: "Community plugins",
-            channelType: "system",
-            creator: channel.creator,
-            createdAt: channel.createdAt,
-            labels: ["buzz-marketplace"],
-          })),
-      ),
-    },
+    channels: { findSystemLabeled },
     channelCreation: { create },
     channelLifecycle: { available: true, run: join },
     profiles: { ensure: vi.fn(async () => {}) },
@@ -152,5 +145,31 @@ export function fakeCommunity({
     create,
     join,
     made,
+    findSystemLabeled,
+  };
+}
+
+/** A relay whose selected community can be switched, as signing in to
+ * another one does. */
+export function switchableRelay(
+  first: ReturnType<typeof fakeCommunity> | undefined,
+) {
+  const listeners = new Set<() => void>();
+  let current = first;
+  const disconnected = { status: "disconnected", generation: 0 };
+  const relay = {
+    snapshot: () =>
+      current ? (current.relay.snapshot() as unknown) : disconnected,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  return {
+    relay: relay as unknown as RelayData,
+    select(next: ReturnType<typeof fakeCommunity> | undefined) {
+      current = next;
+      for (const listener of listeners) listener();
+    },
   };
 }

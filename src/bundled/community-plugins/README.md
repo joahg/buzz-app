@@ -4,7 +4,7 @@ Browse plugins that people publish in public Git repositories, see how many peop
 
 ## Getting started
 
-1. Turn on **Community plugins** in **Settings → Plugins → Manage plugins**, then open **Community plugins** in the sidebar.
+1. Open **Community plugins** in the sidebar. It's on by default; you can turn it off in **Settings → Plugins → Manage plugins**.
 2. Search, filter by category, or sort by **Most installed here**, **Most upvoted here** or **Recently updated**. Open a plugin to read its description, its automated audit and what it can access.
 3. Choose **Add to Buzz**. Buzz opens its install review for the exact indexed commit, so you can check the source and access before installing.
 4. Once a plugin is installed, choose **Upvote** if you like it. You can take your upvote back at any time.
@@ -13,4 +13,4 @@ To list your own plugin, choose **Add your plugin** on the plugin list. Enter it
 
 Community plugins aren't reviewed by Buzz. Only an **Official** badge marks plugins published by Block. Your Buzz's install review is always the final check.
 
-Install counts and upvotes stay in your community: members of the community you have selected can see which plugins you installed and upvoted, and nobody outside it can. Turn off **Count my installs and upvotes in this community** on the page to remove yours. A plugin's page lists who installed it here. The page is available only in builds configured with a community plugin index.
+Install counts and upvotes stay in your community. Buzz records each plugin you install, from this page or anywhere else, in the community you have selected, and removes the record when you uninstall it. Members of that community can see which plugins you installed and liked, and nobody outside it can. Turn off **Record my plugins in this community** on the page to stop, which removes yours. A plugin's page lists who installed it here. The page is available only in builds configured with a community plugin index.

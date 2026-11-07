@@ -2024,6 +2024,76 @@ it("finds one creator's labeled channels oldest first and admits only relay-prov
   ).rejects.toThrow(/creator/);
 });
 
+it("finds labeled system channels from any creator, oldest first", async () => {
+  const h = setup({}, { channelIdentity: true });
+  h.channels.ensureList();
+  (await h.next(39002)).respond([]);
+  await h.rosters(0);
+  await h.settled();
+  const id = (n: number) =>
+    `40000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const system = (n: number, extra: readonly string[][], author = relay) =>
+    metadata(author, id(n), `system ${n}`, 1_700_000_000, [
+      ["public"],
+      ["t", "system"],
+      ["P", keypair().pubkey],
+      ...extra,
+    ]);
+  const page = [
+    system(1, [
+      ["t", "buzz-marketplace"],
+      ["created_at", "300"],
+    ]),
+    system(2, [
+      ["t", "buzz-marketplace"],
+      ["created_at", "100"],
+    ]),
+    // Unlabeled, typed as a stream, or signed by someone else: dropped.
+    system(3, [["created_at", "50"]]),
+    metadata(relay, id(4), "stream", 1_700_000_000, [
+      ["public"],
+      ["t", "stream"],
+      ["t", "buzz-marketplace"],
+    ]),
+    system(5, [["t", "buzz-marketplace"]], keypair()),
+  ];
+  const done = h.channels.findSystemLabeled?.("buzz-marketplace", {
+    consistency: "strong",
+  });
+  assert.exists(done);
+  const request = await h.next(39000);
+  expect(request.filters).toEqual([
+    {
+      kinds: [39000],
+      consistency: "strong",
+      authors: [relay.pubkey],
+      "#t": ["system"],
+      limit: 100,
+    },
+  ]);
+  request.respond(page);
+  const resolve = await h.next(39000);
+  const ids = resolve.filters[0]?.["#d"] ?? [];
+  expect([...ids].sort()).toEqual([id(1), id(2)]);
+  resolve.respond(page.filter((event) => ids.includes(tag(event, "d") ?? "")));
+  const found = await done;
+  expect(found.map((channel) => channel.id)).toEqual([id(2), id(1)]);
+  expect(found[0]).toMatchObject({ channelType: "system", createdAt: 100 });
+  await expect(h.channels.findSystemLabeled?.("System")).rejects.toThrow(
+    /channel labels/,
+  );
+});
+
+it("refuses a system label lookup on a relay without channel identity", async () => {
+  const h = setup();
+  h.channels.ensureList();
+  await h.rosters(0);
+  await h.settled();
+  await expect(
+    h.channels.findSystemLabeled?.("buzz-marketplace"),
+  ).rejects.toThrow(/does not support channel labels/);
+});
+
 it("finds a labeled system channel whose roster arrived before its metadata", async () => {
   const h = setup({}, { channelIdentity: true });
   h.channels.ensureList();

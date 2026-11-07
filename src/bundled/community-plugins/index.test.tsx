@@ -16,6 +16,10 @@ it("registers one primary workspace page and removes it on dispose", async () =>
     snapshot: () => ({ status: "disconnected" }),
     subscribe: () => () => {},
   });
+  ctx.provide("pluginInventory", {
+    installed: () => [],
+    subscribe: () => () => {},
+  });
   ctx.provide("host", {
     request: async () => ({ status: 404, headers: {}, body: "" }),
   });

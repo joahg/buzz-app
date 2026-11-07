@@ -150,11 +150,18 @@ export function parseIndex(value: unknown): Index | null {
     return null;
   const slugs = new Set<string>();
   const keys = new Set<string>();
+  const ids = new Set<string>();
   const plugins = raw.plugins.filter((plugin): plugin is Listing => {
-    if (!validListing(plugin) || slugs.has(plugin.slug) || keys.has(plugin.key))
+    if (
+      !validListing(plugin) ||
+      slugs.has(plugin.slug) ||
+      keys.has(plugin.key) ||
+      ids.has(plugin.id)
+    )
       return false;
     slugs.add(plugin.slug);
     keys.add(plugin.key);
+    ids.add(plugin.id);
     return true;
   });
   if (raw.plugins.length && !plugins.length) return null;
@@ -191,8 +198,8 @@ export function ranked(
   index: Index,
   sort: Sort,
   counts?: Readonly<{
-    installs(key: string): number;
-    upvotes(key: string): number;
+    installs(id: string): number;
+    upvotes(id: string): number;
   }>,
 ): Listing[] {
   const order = new Map(index.plugins.map((plugin, at) => [plugin.key, at]));
@@ -200,8 +207,8 @@ export function ranked(
     sort === "updated"
       ? updated(listing)
       : sort === "installs"
-        ? (counts?.installs(listing.key) ?? 0)
-        : (counts?.upvotes(listing.key) ?? 0);
+        ? (counts?.installs(listing.id) ?? 0)
+        : (counts?.upvotes(listing.id) ?? 0);
   return [...index.plugins].sort(
     (a, b) =>
       score(b) - score(a) || (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0),

@@ -3,9 +3,12 @@ import { expect, it } from "vitest";
 import {
   CountsUnavailable,
   ensureChannel,
+  findChannel,
   INSTALL_TYPE,
   installCount,
+  MAX_RECONCILE,
   readCounts,
+  readOwn,
   reconcile,
   recordId,
   type RecordType,
@@ -19,8 +22,8 @@ import { fakeCommunity } from "./testing";
 const alice = "a".repeat(64);
 const bob = "b".repeat(64);
 const carol = "c".repeat(64);
-const key = "github.com/octo/notes-plugin";
-const other = "github.com/octo/other";
+const key = "octo.notes";
+const other = "octo.other";
 const channel = "00000001-0000-4000-8000-000000000000";
 
 async function record(
@@ -42,6 +45,7 @@ async function record(
       ["h", channel],
       ["type", type],
       ["plugin", pluginKey],
+      ["installer", pubkey],
       ["op", "create"],
     ],
   });
@@ -91,13 +95,8 @@ it("ignores records whose id isn't derived from their author", async () => {
   expect(installCount(counts.tally, other)).toBe(0);
 });
 
-it("uses the oldest marketplace channel an owner or admin made", async () => {
+it("uses the oldest open marketplace channel, whoever made it", async () => {
   const community = fakeCommunity({
-    roster: [
-      { pubkey: alice, role: "member" },
-      { pubkey: bob, role: "admin" },
-      { pubkey: carol, role: "member" },
-    ],
     channels: [
       {
         id: "00000003-0000-4000-8000-000000000000",
@@ -113,32 +112,80 @@ it("uses the oldest marketplace channel an owner or admin made", async () => {
     ],
   });
   await expect(ensureChannel(community.session)).resolves.toMatchObject({
-    id: channel,
+    id: "00000003-0000-4000-8000-000000000000",
   });
   expect(community.create).not.toHaveBeenCalled();
+  expect(community.findSystemLabeled).toHaveBeenCalledWith(
+    "buzz-marketplace",
+    expect.objectContaining({ consistency: "strong" }),
+  );
 });
 
-it("creates the channel only for an owner or admin", async () => {
-  const owner = fakeCommunity();
-  await expect(ensureChannel(owner.session)).resolves.toMatchObject({
+it("skips private and archived marketplace channels", async () => {
+  const community = fakeCommunity({
+    channels: [
+      {
+        id: "00000003-0000-4000-8000-000000000000",
+        creator: carol,
+        createdAt: 1,
+        private: true,
+      },
+      {
+        id: "00000002-0000-4000-8000-000000000000",
+        creator: bob,
+        createdAt: 2,
+        archived: true,
+      },
+      { id: channel, creator: carol, createdAt: 3 },
+    ],
+  });
+  await expect(findChannel(community.session)).resolves.toMatchObject({
+    id: channel,
+  });
+  const none = fakeCommunity({
+    channels: [{ id: channel, creator: bob, createdAt: 1, private: true }],
+  });
+  await expect(ensureChannel(none.session)).resolves.toMatchObject({
     creator: alice,
   });
-  expect(owner.create).toHaveBeenCalledWith({
+  expect(none.create).toHaveBeenCalledTimes(1);
+});
+
+it("lets any member create the channel, once per session", async () => {
+  const member = fakeCommunity({ viewer: carol });
+  const [first, second] = await Promise.all([
+    ensureChannel(member.session),
+    ensureChannel(member.session),
+  ]);
+  expect(first).toEqual(second);
+  expect(first).toMatchObject({ creator: carol });
+  expect(member.create).toHaveBeenCalledTimes(1);
+  expect(member.create).toHaveBeenCalledWith({
     name: "Community plugins",
     description: "Plugin installs and upvotes in this community.",
     visibility: "open",
     labels: ["buzz-marketplace"],
     system: true,
   });
-  const member = fakeCommunity({ roster: [{ pubkey: alice, role: "member" }] });
-  await expect(ensureChannel(member.session)).rejects.toThrow(
+});
+
+it("degrades quietly without system channels or artifacts", async () => {
+  const community = fakeCommunity();
+  const session = community.session as unknown as {
+    channels: Record<string, unknown>;
+    snapshotRead?: unknown;
+  };
+  delete session.channels.findSystemLabeled;
+  await expect(ensureChannel(community.session)).rejects.toThrow(
     CountsUnavailable,
   );
-  expect(member.create).not.toHaveBeenCalled();
-  const open = fakeCommunity({ roster: null });
-  await expect(ensureChannel(open.session)).rejects.toThrow(
-    "doesn't publish its members",
+  const noArtifacts = fakeCommunity();
+  delete (noArtifacts.session as unknown as { snapshotRead?: unknown })
+    .snapshotRead;
+  await expect(readCounts(noArtifacts.session)).rejects.toThrow(
+    CountsUnavailable,
   );
+  expect(noArtifacts.create).not.toHaveBeenCalled();
 });
 
 it("joins, creates, updates and skips unchanged records", async () => {
@@ -173,26 +220,91 @@ it("joins, creates, updates and skips unchanged records", async () => {
   expect(community.join).toHaveBeenCalledTimes(1);
 });
 
+it("tags installs with where they came from", async () => {
+  const community = existing();
+  const git = {
+    repository: "https://github.com/octo/notes",
+    path: "plugin",
+    commit: "c".repeat(40),
+  };
+  await writeRecord(community.session, channel, INSTALL_TYPE, key, true, {
+    source: git,
+  });
+  expect(community.store.heads()[0]?.tags).toEqual(
+    expect.arrayContaining([
+      ["installer", alice],
+      ["source", git.repository],
+      ["path", "plugin"],
+      ["commit", git.commit],
+    ]),
+  );
+  await writeRecord(community.session, channel, INSTALL_TYPE, key, true, {
+    source: git,
+  });
+  expect(community.publish).toHaveBeenCalledTimes(1);
+  await writeRecord(community.session, channel, INSTALL_TYPE, key, true, {
+    source: "local",
+  });
+  const [local] = community.store.heads();
+  expect(local?.tags).toContainEqual(["source", "local"]);
+  expect(local?.tags.find((t) => t[0] === "path")).toBeUndefined();
+  await expect(
+    writeRecord(community.session, channel, INSTALL_TYPE, "Not An Id", true),
+  ).rejects.toThrow("Invalid plugin id");
+});
+
+it("reads only the viewer's own records", async () => {
+  const community = existing();
+  await record(community, INSTALL_TYPE, alice, key);
+  await record(community, VOTE_TYPE, alice, key, false);
+  await record(community, INSTALL_TYPE, bob, other);
+  await record(
+    community,
+    INSTALL_TYPE,
+    alice,
+    other,
+    true,
+    "00000009-0000-4000-8000-000000000000",
+  );
+  const own = await readOwn(community.session, channel);
+  expect(own.map(({ type, id, on }) => ({ type, id, on }))).toEqual([
+    { type: INSTALL_TYPE, id: key, on: true },
+    { type: VOTE_TYPE, id: key, on: false },
+  ]);
+});
+
 it("reconciles records with what is installed, within a bound", async () => {
   const community = existing();
   await record(community, INSTALL_TYPE, alice, other);
   await record(community, VOTE_TYPE, alice, other);
-  const counts = await readCounts(community.session);
-  const listings = [
-    { key, id: "octo.notes" },
-    { key: other, id: "octo.other" },
-  ];
+  await record(community, INSTALL_TYPE, alice, "octo.kept");
+  const own = await readOwn(community.session, channel);
   expect(
-    reconcile(counts, listings, (id) => id === "octo.notes", true),
+    reconcile(
+      own,
+      [
+        { id: key, source: "local" },
+        { id: "octo.kept", source: "local" },
+      ],
+      true,
+    ),
   ).toEqual([
-    { type: INSTALL_TYPE, key, on: true },
-    { type: INSTALL_TYPE, key: other, on: false },
-    { type: VOTE_TYPE, key: other, on: false },
+    { type: INSTALL_TYPE, id: key, on: true, source: "local" },
+    { type: INSTALL_TYPE, id: "octo.kept", on: true, source: "local" },
+    { type: VOTE_TYPE, id: other, on: false },
+    { type: INSTALL_TYPE, id: other, on: false },
   ]);
-  expect(reconcile(counts, listings, () => true, true)).toEqual([
-    { type: INSTALL_TYPE, key, on: true },
+  expect(reconcile(own, [], false)).toEqual([
+    { type: VOTE_TYPE, id: other, on: false },
+    { type: INSTALL_TYPE, id: other, on: false },
+    { type: INSTALL_TYPE, id: "octo.kept", on: false },
   ]);
-  expect(reconcile(counts, listings, () => true, false)).toHaveLength(2);
+  const many = Array.from({ length: MAX_RECONCILE + 5 }, (_, n) => ({
+    id: `octo.p${n}`,
+    source: "local" as const,
+  }));
+  expect(reconcile([], many, true)).toHaveLength(MAX_RECONCILE);
+  expect(reconcile([], [{ id: "Bad Id", source: "local" }], true)).toEqual([]);
 });
 
 it("updates counts the way the written record reads back", async () => {

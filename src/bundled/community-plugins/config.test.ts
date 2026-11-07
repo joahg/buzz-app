@@ -15,10 +15,10 @@ it("grants network access only to a configured index and GitHub's API", () => {
   expect(communityIndexOrigin()).toBe("https://plugins.example");
 });
 
-it("ships off by default with no access in a build without an index", () => {
+it("ships on by default with no access in a build without an index", () => {
   const plugin = bundledPlugins.find(
     ({ manifest }) => manifest.id === "buzz.community-plugins",
   );
-  expect(plugin?.enabledByDefault).toBe(false);
+  expect(plugin?.enabledByDefault).toBe(true);
   expect(plugin?.manifest.host).toBeUndefined();
 });

@@ -110,7 +110,7 @@ builds.
 
 ## Community plugin index
 
-The bundled Community plugins plugin (`buzz.community-plugins`, off by
+The bundled Community plugins plugin (`buzz.community-plugins`, on by
 default) lists plugins people publish in public Git repositories from a public
 plugin index. Set `BUZZ_COMMUNITY_PLUGIN_INDEX_URL` to the index's exact HTTPS
 origin (no path or trailing slash) in repository-root `.env.local` or the build
@@ -121,17 +121,28 @@ shows "No community index configured". Any other value fails the build.
 
 Installs go through the usual plugin review. Install counts and upvotes never
 go to the index: they stay in the selected community. Each community keeps them
-in one open NIP-CL system channel labeled `buzz-marketplace`, the oldest one
-that a community owner or admin created; the first owner or admin to open the
-page creates it. A member's install or upvote is one NIP-AR artifact there
-(type `buzz.plugin.install` or `buzz.plugin.vote`, the listing key in a
-`plugin` tag) whose `d` is derived from the member's key and the listing key, so
-the plugin counts each member once per plugin and an upvote only from someone
-who has it installed. Members joining to write is automatic. Counts are read
-from current revisions, so only that community's members see them, along with
-who installed what. People can turn counting off on the page, which withdraws
-their records. A community without a signed member list, NIP-CL or NIP-AR shows
-no counts.
+in one open NIP-CL system channel labeled `buzz-marketplace`: the oldest open,
+unarchived one, whoever created it. When a complete lookup finds none, the first
+member's Buzz to need it creates it, and joins it to write.
+
+The plugin records every installed plugin, wherever it came from: from the
+page, a Git repository, or a local folder. Bundled plugins aren't recorded. In
+the background, at startup, whenever the installed set changes and whenever
+another community is selected, it brings the member's records in that
+community in line with what is installed, adding missing ones and withdrawing
+those for removed plugins. It writes only what differs, at most 50 records per
+pass. A member's install or upvote is one NIP-AR artifact (type
+`buzz.plugin.install` or `buzz.plugin.vote`) with the plugin's manifest id in a
+`plugin` tag and the writer in an `installer` tag. An install also records its
+source: `source`, `path` and `commit` tags for a Git install (the repository
+without credentials), or `source` `local`. Its `d` is derived from the member's
+key and the plugin id, so counts take each member once per plugin and an upvote
+only from someone with an install record. Index listings are counted by
+manifest id. Counts are read from current revisions, so only that community's
+members see them, along with who installed what. **Record my plugins in this
+community** on the page stops recording; turning it off withdraws the member's
+records. A community without NIP-CL or NIP-AR shows no counts and gets no
+records.
 
 **Add your plugin** on the page lets an author list a plugin. It checks
 anonymously through `https://api.github.com` that the repository is public and

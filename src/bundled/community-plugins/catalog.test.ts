@@ -22,6 +22,12 @@ it("keeps only valid listings, once each", () => {
       good,
       other,
       { ...good, slug: "duplicate" },
+      {
+        ...other,
+        key: "github.com/octo/copy",
+        slug: "same-id",
+        source: { ...good.source, repository: "https://github.com/octo/copy" },
+      },
       { ...good, key: "gitlab.com/x/y", slug: "elsewhere" },
       { ...good, key: "github.com/block/x", slug: "fake-official" },
     ]),
@@ -36,22 +42,24 @@ it("orders by community counts, then by the index's own order", () => {
   const a = listing({
     key: "github.com/octo/a",
     slug: "a",
+    id: "octo.a",
     updatedAt: "2026-01-01T00:00:00Z",
   });
   const b = listing({
     key: "github.com/octo/b",
     slug: "b",
+    id: "octo.b",
     updatedAt: "2026-03-01T00:00:00Z",
   });
-  const c = listing({ key: "github.com/octo/c", slug: "c" });
+  const c = listing({ key: "github.com/octo/c", slug: "c", id: "octo.c" });
   const index = {
     schemaVersion: 1 as const,
     generatedAt: "",
     plugins: [a, b, c],
   };
   const counts = {
-    installs: (key: string) => (key === c.key ? 3 : key === b.key ? 1 : 0),
-    upvotes: (key: string) => (key === a.key ? 2 : 0),
+    installs: (id: string) => (id === c.id ? 3 : id === b.id ? 1 : 0),
+    upvotes: (id: string) => (id === a.id ? 2 : 0),
   };
   const slugs = (sort: "installs" | "upvotes" | "updated", withCounts = true) =>
     ranked(index, sort, withCounts ? counts : undefined).map((p) => p.slug);

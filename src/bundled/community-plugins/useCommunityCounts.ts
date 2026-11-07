@@ -10,32 +10,14 @@ import type { RelaySession } from "../../features/relay/session";
 import {
   type CommunityCounts,
   CountsUnavailable,
-  INSTALL_TYPE,
   installCount,
   readCounts,
-  reconcile,
-  type RecordType,
   upvoteCount,
   VOTE_TYPE,
   withRecord,
   writeRecord,
 } from "./community-counts";
-
-export const RECORD_KEY = "buzz.community-plugins.record.v1";
-
-export function recordingEnabled(): boolean {
-  try {
-    return window.localStorage.getItem(RECORD_KEY) !== "off";
-  } catch {
-    return false;
-  }
-}
-
-function saveRecording(on: boolean) {
-  try {
-    window.localStorage.setItem(RECORD_KEY, on ? "on" : "off");
-  } catch {}
-}
+import type { Recorder } from "./recorder";
 
 export type CountsState =
   | Readonly<{ status: "loading" }>
@@ -47,11 +29,11 @@ const noRelay = {
   snapshot: () => undefined,
 };
 
-/** The selected community's plugin counts, and the viewer's writes to them. */
+/** The selected community's plugin counts, by plugin id, and the viewer's
+ * upvotes. The recorder keeps the viewer's install records. */
 export function useCommunityCounts(
   relay: RelayData | undefined,
-  listings: readonly Readonly<{ key: string; id: string }>[] | undefined,
-  installed: (id: string) => boolean,
+  recorder: Recorder | undefined,
   version: number,
 ) {
   const snapshot = useSyncExternalStore(
@@ -61,24 +43,28 @@ export function useCommunityCounts(
   const session: RelaySession | undefined =
     snapshot?.status === "ready" ? snapshot.session : undefined;
   const [state, setState] = useState<CountsState>({ status: "loading" });
-  const [recording, setRecording] = useState(recordingEnabled);
+  const [recording, setRecording] = useState(
+    () => recorder?.recording() ?? false,
+  );
+  const [written, setWritten] = useState(0);
   const latest = useRef<{
     session?: RelaySession | undefined;
     counts?: CommunityCounts | undefined;
   }>({});
-  const installedRef = useRef(installed);
-  installedRef.current = installed;
-  const recordingRef = useRef(recording);
-  recordingRef.current = recording;
 
   const show = useCallback((counts: CommunityCounts) => {
     latest.current.counts = counts;
     setState({ status: "ready", counts });
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Refresh reads the counts again.
+  useEffect(
+    () => recorder?.subscribe(() => setWritten((count) => count + 1)),
+    [recorder],
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: A new version or recorder write reads the counts again.
   useEffect(() => {
-    latest.current = { session };
+    if (latest.current.session !== session) latest.current = { session };
     if (!session) {
       setState({
         status: "unavailable",
@@ -86,35 +72,16 @@ export function useCommunityCounts(
       });
       return;
     }
-    if (!listings) return;
     const controller = new AbortController();
     const { signal } = controller;
-    setState({ status: "loading" });
+    if (!latest.current.counts) setState({ status: "loading" });
     void (async () => {
       try {
-        let counts = await readCounts(session, signal);
-        if (signal.aborted) return;
+        const counts = await readCounts(session, signal);
+        if (signal.aborted || latest.current.session !== session) return;
         show(counts);
-        for (const change of reconcile(
-          counts,
-          listings,
-          installedRef.current,
-          recordingRef.current,
-        )) {
-          await writeRecord(
-            session,
-            counts.channel,
-            change.type,
-            change.key,
-            change.on,
-          );
-          if (signal.aborted || latest.current.session !== session) return;
-          counts = withRecord(counts, change.type, change.key, change.on);
-          show(counts);
-        }
       } catch (error) {
-        if (signal.aborted) return;
-        if (latest.current.counts) return;
+        if (signal.aborted || latest.current.counts) return;
         setState({
           status: "unavailable",
           message:
@@ -125,56 +92,32 @@ export function useCommunityCounts(
       }
     })();
     return () => controller.abort();
-  }, [session, listings, show, version]);
+  }, [session, show, version, written]);
 
-  const write = useCallback(
-    async (type: RecordType, key: string, on: boolean) => {
+  const vote = useCallback(
+    async (id: string, on: boolean) => {
       const { session: current, counts } = latest.current;
-      if (!current || !counts) return false;
+      if (!recorder?.recording() || !current || !counts) return false;
       try {
-        await writeRecord(current, counts.channel, type, key, on);
+        await writeRecord(current, counts.channel, VOTE_TYPE, id, on);
       } catch {
         return false;
       }
       if (latest.current.session !== current) return false;
-      show(withRecord(latest.current.counts ?? counts, type, key, on));
+      show(withRecord(latest.current.counts ?? counts, VOTE_TYPE, id, on));
       return true;
     },
-    [show],
-  );
-
-  const recordInstall = useCallback(
-    (key: string) =>
-      recordingRef.current
-        ? write(INSTALL_TYPE, key, true)
-        : Promise.resolve(false),
-    [write],
-  );
-  const vote = useCallback(
-    (key: string, on: boolean) =>
-      recordingRef.current ? write(VOTE_TYPE, key, on) : Promise.resolve(false),
-    [write],
+    [recorder, show],
   );
 
   /** Turning recording off withdraws every install and upvote the viewer
-   * recorded here. */
+   * recorded here; turning it on records what is installed again. */
   const changeRecording = useCallback(
     async (on: boolean) => {
-      saveRecording(on);
       setRecording(on);
-      recordingRef.current = on;
-      const counts = latest.current.counts;
-      if (!counts) return;
-      if (on) {
-        for (const { key, id } of listings ?? [])
-          if (installedRef.current(id)) await write(INSTALL_TYPE, key, true);
-        return;
-      }
-      for (const [key, people] of counts.tally.installers)
-        if (people.has(counts.viewer)) await write(INSTALL_TYPE, key, false);
-      for (const key of counts.myVotes) await write(VOTE_TYPE, key, false);
+      await recorder?.setRecording(on);
     },
-    [listings, write],
+    [recorder],
   );
 
   const counts = state.status === "ready" ? state.counts : undefined;
@@ -183,14 +126,13 @@ export function useCommunityCounts(
     session,
     recording,
     changeRecording,
-    recordInstall,
     vote,
-    installs: (key: string) => installCount(counts?.tally, key),
-    upvotes: (key: string) => upvoteCount(counts?.tally, key),
-    installers: (key: string) => [...(counts?.tally.installers.get(key) ?? [])],
-    voted: (key: string) => !!counts?.myVotes.has(key),
-    mine: (key: string) =>
-      !!counts?.tally.installers.get(key)?.has(counts.viewer),
+    installs: (id: string) => installCount(counts?.tally, id),
+    upvotes: (id: string) => upvoteCount(counts?.tally, id),
+    installers: (id: string) => [...(counts?.tally.installers.get(id) ?? [])],
+    voted: (id: string) => !!counts?.myVotes.has(id),
+    mine: (id: string) =>
+      !!counts?.tally.installers.get(id)?.has(counts.viewer),
   };
 }
 

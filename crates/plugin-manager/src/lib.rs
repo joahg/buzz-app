@@ -565,6 +565,7 @@ fn enabled_by_default(id: &str) -> bool {
             | "buzz.relay-staff"
             | "buzz.typesafe"
             | "buzz.plugin-development"
+            | "buzz.community-plugins"
     )
 }
 /// Bundled ids that older profiles may still hold as installed plugins.
