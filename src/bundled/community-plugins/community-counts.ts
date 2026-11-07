@@ -276,23 +276,14 @@ async function join(
 
 export type Source = InstalledPlugin["source"];
 
+// Only the kind of source: a repository URL could name a private repository.
 const sourceTags = (source: Source | undefined): string[][] =>
   source === undefined
     ? []
-    : source === "local"
-      ? [["source", "local"]]
-      : [
-          ["source", source.repository],
-          ["path", source.path],
-          ...(source.commit ? [["commit", source.commit]] : []),
-        ];
+    : [["source", source === "local" ? "local" : "git"]];
 
-const sameSource = (event: EventData, source: Source | undefined) => {
-  const want = sourceTags(source);
-  return ["source", "path", "commit"].every(
-    (name) => tag(event, name) === want.find((t) => t[0] === name)?.[1],
-  );
-};
+const sameSource = (event: EventData, source: Source | undefined) =>
+  tag(event, "source") === sourceTags(source)[0]?.[1];
 
 /** One of the viewer's own records, as its current revision reads. */
 export type OwnRecord = Readonly<{

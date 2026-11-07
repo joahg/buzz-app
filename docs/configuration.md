@@ -133,9 +133,9 @@ community in line with what is installed, adding missing ones and withdrawing
 those for removed plugins. It writes only what differs, at most 50 records per
 pass. A member's install or upvote is one NIP-AR artifact (type
 `buzz.plugin.install` or `buzz.plugin.vote`) with the plugin's manifest id in a
-`plugin` tag and the writer in an `installer` tag. An install also records its
-source: `source`, `path` and `commit` tags for a Git install (the repository
-without credentials), or `source` `local`. Its `d` is derived from the member's
+`plugin` tag and the writer in an `installer` tag. An install also records the
+kind of source in a `source` tag, `git` or `local`, never the repository, which
+could be private. Its `d` is derived from the member's
 key and the plugin id, so counts take each member once per plugin and an upvote
 only from someone with an install record. Index listings are counted by
 manifest id. Counts are read from current revisions, so only that community's

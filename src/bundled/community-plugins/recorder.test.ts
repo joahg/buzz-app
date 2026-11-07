@@ -73,8 +73,7 @@ it("records what is installed at startup, creating the channel if none exists", 
   expect(record?.tags).toEqual(
     expect.arrayContaining([
       ["installer", alice],
-      ["source", "https://github.com/octo/notes"],
-      ["commit", "c".repeat(40)],
+      ["source", "git"],
     ]),
   );
 });

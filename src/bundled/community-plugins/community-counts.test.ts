@@ -220,7 +220,7 @@ it("joins, creates, updates and skips unchanged records", async () => {
   expect(community.join).toHaveBeenCalledTimes(1);
 });
 
-it("tags installs with where they came from", async () => {
+it("tags installs with the kind of source only", async () => {
   const community = existing();
   const git = {
     repository: "https://github.com/octo/notes",
@@ -233,10 +233,11 @@ it("tags installs with where they came from", async () => {
   expect(community.store.heads()[0]?.tags).toEqual(
     expect.arrayContaining([
       ["installer", alice],
-      ["source", git.repository],
-      ["path", "plugin"],
-      ["commit", git.commit],
+      ["source", "git"],
     ]),
+  );
+  expect(JSON.stringify(community.store.heads()[0])).not.toContain(
+    "github.com",
   );
   await writeRecord(community.session, channel, INSTALL_TYPE, key, true, {
     source: git,
