@@ -1,32 +1,28 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { writeClipboardText } from "../../shared/clipboard";
-import { CopyIcon, FileTextIcon } from "../../shared/design-system/icons";
+import { FileTextIcon } from "../../shared/design-system/icons";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
-import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { LoadingRegion } from "../../shared/design-system/ui/LoadingRegion";
-import { useToastNotification } from "../../shared/design-system/ui/Toast";
-import { SafeMarkdown } from "../../features/messages/SafeMarkdown";
 import type { RelaySession } from "../../features/relay/session";
-import {
-  type FileFormat,
-  formatLabel,
-  MAX_MARKDOWN_CHARS,
-  MAX_SHOWN_CHARS,
-  maxBytes,
-} from "./formats";
-import { decodeText, LoadError, readBytes } from "./load";
+import { CopyText } from "./CopyText";
+import { DocumentView, type MediaSource } from "./DocumentView";
+import { formatLabel, maxBytes } from "./formats";
+import { decodeText, isPdfBytes, LoadError, readBytes } from "./load";
 import { parseTable } from "./table";
 import type { FileTarget } from "./target";
 import styles from "./FileViewer.module.css";
 
 const PdfView = lazy(() => import("./PdfView"));
+const OfficeView = lazy(() => import("./OfficeView"));
+const PageFile = lazy(() => import("./PageFile"));
 
 export type ViewerProps = Readonly<{
   file: FileTarget;
   source: string | undefined;
   session?: RelaySession | undefined;
   openLink(url: string): boolean;
+  /** Where a Markdown image may be drawn from; without it, images are alt text. */
+  media?: MediaSource | undefined;
   fetcher?: typeof fetch;
 }>;
 
@@ -35,17 +31,17 @@ type Loaded =
   | { state: "failed"; message: string }
   | { state: "ready"; bytes: Uint8Array };
 
-function failureMessage(error: unknown, format: FileFormat): string {
-  const limit = Math.round(maxBytes(format) / (1024 * 1024));
+function failureMessage(error: unknown, file: FileTarget): string {
+  const limit = Math.round(maxBytes(file.format) / (1024 * 1024));
   if (error instanceof LoadError && error.reason === "too-large")
-    return `${formatLabel(format)} files open up to ${limit} MB. Download it to read it.`;
+    return `${formatLabel(file.format, file.name, file.mime)} files open up to ${limit} MB. Download it to read it.`;
   if (error instanceof LoadError && error.reason === "not-text")
     return "This file isn't text. Download it to open it in another app.";
   return "This file couldn't be loaded. Check your connection and try again.";
 }
 
 function useBytes(
-  format: FileFormat,
+  file: FileTarget,
   source: string | undefined,
   fetcher: typeof fetch | undefined,
 ): Loaded {
@@ -54,18 +50,26 @@ function useBytes(
     if (!source) return;
     const controller = new AbortController();
     setLoaded({ state: "loading" });
-    readBytes(source, maxBytes(format), controller.signal, fetcher).then(
+    // A text file may be a renamed PDF; its first bytes say so.
+    const sniffPdf = file.format !== "pdf" && file.format !== "office";
+    readBytes(
+      source,
+      maxBytes(file.format),
+      controller.signal,
+      fetcher,
+      sniffPdf,
+    ).then(
       (bytes) => setLoaded({ state: "ready", bytes }),
       (error: unknown) => {
         if (!controller.signal.aborted)
           setLoaded({
             state: "failed",
-            message: failureMessage(error, format),
+            message: failureMessage(error, file),
           });
       },
     );
     return () => controller.abort();
-  }, [format, source, fetcher]);
+  }, [file, source, fetcher]);
   return loaded;
 }
 
@@ -82,9 +86,10 @@ export function Viewer({
   source,
   session,
   openLink,
+  media,
   fetcher,
 }: ViewerProps) {
-  const loaded = useBytes(file.format, source, fetcher);
+  const loaded = useBytes(file, source, fetcher);
   if (!source)
     return (
       <Unavailable
@@ -106,6 +111,7 @@ export function Viewer({
           bytes={loaded.bytes}
           session={session}
           openLink={openLink}
+          media={media}
         />
       )}
     </div>
@@ -117,30 +123,44 @@ function Contents({
   bytes,
   session,
   openLink,
+  media,
 }: {
   file: FileTarget;
   bytes: Uint8Array;
   session: RelaySession | undefined;
   openLink(url: string): boolean;
+  media: MediaSource | undefined;
 }) {
+  const pdf =
+    file.format === "pdf" || (file.format !== "office" && isPdfBytes(bytes));
+  const binary = pdf || file.format === "office";
   const text = useMemo(() => {
-    if (file.format === "pdf") return undefined;
+    if (binary) return undefined;
     try {
       return decodeText(bytes);
     } catch {
       return null;
     }
-  }, [file.format, bytes]);
-  if (file.format === "pdf")
+  }, [binary, bytes]);
+  const loading = (
+    <LoadingRegion pending label={`Loading ${file.name}`}>
+      {null}
+    </LoadingRegion>
+  );
+  if (binary)
     return (
-      <Suspense
-        fallback={
-          <LoadingRegion pending label={`Loading ${file.name}`}>
-            {null}
-          </LoadingRegion>
-        }
-      >
-        <PdfView bytes={bytes} name={file.name} />
+      <Suspense fallback={loading}>
+        {pdf ? (
+          <PdfView bytes={bytes} name={file.name} />
+        ) : (
+          <OfficeView
+            file={file}
+            bytes={bytes}
+            session={session}
+            openLink={openLink}
+            media={media}
+          />
+        )}
       </Suspense>
     );
   if (text === null || text === undefined)
@@ -150,12 +170,34 @@ function Contents({
         message="This file isn't text. Download it to open it in another app."
       />
     );
+  if (file.format === "page" || file.format === "image")
+    return (
+      <Suspense fallback={loading}>
+        <PageFile
+          file={file}
+          text={text}
+          session={session}
+          openLink={openLink}
+          media={media}
+        />
+      </Suspense>
+    );
+  if (file.format !== "csv" && file.format !== "tsv")
+    return (
+      <DocumentView
+        file={file}
+        text={text}
+        session={session}
+        openLink={openLink}
+        media={media}
+      />
+    );
   return (
     <>
       <InlineHeader
         title={file.name}
         subtitle={formatLabel(file.format)}
-        actions={<CopyText text={text} />}
+        actions={<CopyText read={() => text} />}
       />
       <section
         className={styles.scroll}
@@ -163,59 +205,9 @@ function Contents({
         tabIndex={0}
         aria-label={file.name}
       >
-        {file.format === "markdown" && text.length <= MAX_MARKDOWN_CHARS ? (
-          <article className={styles.markdown}>
-            <SafeMarkdown
-              content={text}
-              openLink={openLink}
-              session={session}
-            />
-          </article>
-        ) : file.format === "csv" || file.format === "tsv" ? (
-          <TableView
-            text={text}
-            delimiter={file.format === "csv" ? "," : "\t"}
-          />
-        ) : (
-          <>
-            {file.format === "markdown" && (
-              <p className={styles.note} role="note">
-                This Markdown file is too long to format, so it shows as plain
-                text.
-              </p>
-            )}
-            <pre className={styles.text}>{text.slice(0, MAX_SHOWN_CHARS)}</pre>
-            {text.length > MAX_SHOWN_CHARS && (
-              <p className={styles.note} role="note">
-                Showing the first {MAX_SHOWN_CHARS.toLocaleString()} characters.
-                Copy text copies all of it, or download the file.
-              </p>
-            )}
-          </>
-        )}
+        <TableView text={text} delimiter={file.format === "csv" ? "," : "\t"} />
       </section>
     </>
-  );
-}
-
-function CopyText({ text }: { text: string }) {
-  const notify = useToastNotification();
-  const [copying, setCopying] = useState(false);
-  return (
-    <IconButton
-      aria-label="Copy text"
-      icon={<CopyIcon />}
-      disabled={copying}
-      onClick={() => {
-        setCopying(true);
-        writeClipboardText(text)
-          .then(
-            () => notify("Copied text to clipboard", "success"),
-            () => notify("Failed to copy text", "error"),
-          )
-          .finally(() => setCopying(false));
-      }}
-    />
   );
 }
 

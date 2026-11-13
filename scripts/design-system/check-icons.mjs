@@ -18,6 +18,7 @@ const nonIconDependencies = new Set([
   "@earendil-works/pi-ai",
   "@earendil-works/pi-durable",
   "@earendil-works/pi-schema",
+  "@e965/xlsx",
   "@emoji-mart/data",
   "@fontsource-variable/inter",
   "@fontsource/jetbrains-mono",
@@ -37,6 +38,7 @@ const nonIconDependencies = new Set([
   "@testing-library/react",
   "@testing-library/user-event",
   "@types/d3-scale",
+  "@types/hast", // Type-only module for highlighted code trees.
   "@types/mdast",
   "@types/node",
   "@types/react",
@@ -51,8 +53,14 @@ const nonIconDependencies = new Set([
   "dockview-react",
   "echarts", // Chart marks; not an icon library.
   "emoji-mart",
+  "fflate",
   "flexlayout-react",
+  "github-slugger", // Heading IDs; not an icon library.
+  "hast", // Type-only module supplied by @types/hast.
+  "hast-util-to-jsx-runtime", // Office document trees to React; not an icon library.
+  "highlight.js", // Code highlighting grammars; not an icon library.
   "jsdom",
+  "lowlight", // Code highlighting into HTML trees; not an icon library.
   "mdast", // Type-only module supplied by @types/mdast.
   "mdast-util-from-markdown",
   "mdast-util-gfm-strikethrough",
@@ -60,8 +68,10 @@ const nonIconDependencies = new Set([
   "mdast-util-to-markdown",
   "micromark-extension-gfm-strikethrough",
   "micromark-extension-gfm-table",
+  "micromark-util-decode-string", // Markdown string decoding; not an icon library.
   "motion",
   "nostr-tools",
+  "parse5", // HTML parsing for file documents; not an icon library.
   "pdfjs-dist", // PDF page rendering; not an icon library.
   "pele",
   "postcss",
@@ -77,13 +87,20 @@ const nonIconDependencies = new Set([
   "react-diff-view", // Patch tables/parser, not an icon library.
   "react-dom",
   "react-markdown",
+  "rehype-raw", // File viewer raw HTML parsing; not an icon library.
+  "rehype-sanitize",
   "remark-breaks",
+  "remark-frontmatter", // File Markdown metadata syntax; not an icon library.
   "remark-gfm",
+  "remark-math", // File Markdown math syntax; not an icon library.
+  "remark-parse", // Markdown parsing; not an icon library.
+  "remark-rehype", // Markdown to HTML trees; not an icon library.
   "rolldown",
   "sonner", // Headless toast behavior; Buzz supplies controls and Tabler icons.
   "tailwindcss",
   "typescript",
   "undici",
+  "unified", // Markdown processing pipeline; not an icon library.
   "virtua",
   "vite",
   "vitest",
