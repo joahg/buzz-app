@@ -44,8 +44,71 @@ export function useChannelRoster(queries: ChannelQueries) {
   }, [queries]);
   return useSyncExternalStore(queries.subscribeList, snapshot, snapshot);
 }
+/**
+ * The list for surfaces that never show `preview`: a ready list that changed
+ * only previews keeps the previous snapshot. With `activity` false it also
+ * ignores `lastActivityAt` and `activityKnown`, for a sidebar with no Recent
+ * order and no Active filter.
+ */
+export function useChannelListWithoutPreviews(
+  queries: ChannelQueries,
+  activity: boolean,
+) {
+  useEffect(() => queries.ensureList(), [queries]);
+  const last = useRef<{
+    queries: ChannelQueries;
+    activity: boolean;
+    list: ChannelList;
+  }>(undefined);
+  const snapshot = useCallback(() => {
+    const next = queries.list();
+    const previous = last.current;
+    if (
+      previous?.queries === queries &&
+      previous.activity === activity &&
+      (previous.list === next ||
+        (previous.list.activityStatus === next.activityStatus &&
+          previous.list.error === next.error &&
+          sameRoster(
+            previous.list,
+            next,
+            activity ? previewField : activityFields,
+          )))
+    )
+      return previous.list;
+    last.current = { queries, activity, list: next };
+    return next;
+  }, [queries, activity]);
+  return useSyncExternalStore(queries.subscribeList, snapshot, snapshot);
+}
+const listIndexes = new WeakMap<ChannelList, Map<string, ChannelSummary>>();
+function listEntry(list: ChannelList, id: string) {
+  let index = listIndexes.get(list);
+  if (!index) {
+    index = new Map(list.channels.map((channel) => [channel.id, channel]));
+    listIndexes.set(list, index);
+  }
+  return index.get(id);
+}
+/** One row's current summary, so a message re-renders that row only. Falls
+ * back to `channel` while the live list does not hold it. */
+export function useLiveChannelSummary(
+  queries: ChannelQueries,
+  channel: ChannelSummary,
+) {
+  const snapshot = useCallback(
+    () => listEntry(queries.list(), channel.id) ?? channel,
+    [queries, channel],
+  );
+  return useSyncExternalStore(queries.subscribeList, snapshot, snapshot);
+}
 const activityFields = new Set(["preview", "lastActivityAt", "activityKnown"]);
-function sameRoster(a: ChannelList, b: ChannelList) {
+const previewField = new Set(["preview"]);
+function sameRoster(
+  a: ChannelList,
+  b: ChannelList,
+  ignored: ReadonlySet<string> = activityFields,
+) {
   return (
     a.status === "ready" &&
     b.status === "ready" &&
@@ -54,17 +117,21 @@ function sameRoster(a: ChannelList, b: ChannelList) {
     a.rosterAsOf === b.rosterAsOf &&
     a.channels.length === b.channels.length &&
     a.channels.every((channel, index) =>
-      sameRosterEntry(channel, b.channels[index]),
+      sameRosterEntry(channel, b.channels[index], ignored),
     )
   );
 }
-function sameRosterEntry(a: ChannelSummary, b: ChannelSummary | undefined) {
+function sameRosterEntry(
+  a: ChannelSummary,
+  b: ChannelSummary | undefined,
+  ignored: ReadonlySet<string>,
+) {
   if (a === b) return true;
   if (!b) return false;
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const key of keys)
     if (
-      !activityFields.has(key) &&
+      !ignored.has(key) &&
       a[key as keyof ChannelSummary] !== b[key as keyof ChannelSummary]
     )
       return false;

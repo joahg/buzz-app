@@ -907,10 +907,19 @@ it("rebuilds only the changed row on a list publish", async () => {
   render(h.view("alpha"));
   await screen.findByRole("button", { name: "gamma" });
   rowRender.mockClear();
-  h.publish("beta", { preview: "hello" });
+  h.publish("beta", { name: "beta renamed" });
   expect(rowRender.mock.calls.map(([props]) => props.channel.id)).toEqual([
     "beta",
   ]);
+});
+
+it("rebuilds no host row when only a message preview changes", async () => {
+  const h = fixture();
+  render(h.view("alpha"));
+  await screen.findByRole("button", { name: "gamma" });
+  rowRender.mockClear();
+  h.publish("beta", { preview: "hello", lastActivityAt: 99 });
+  expect(rowRender).not.toHaveBeenCalled();
 });
 
 it("closes a removed DM's menu and focuses its neighbor before the exit ends", async () => {

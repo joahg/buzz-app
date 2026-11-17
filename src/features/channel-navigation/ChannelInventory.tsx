@@ -18,7 +18,7 @@ import { inTeamInventory } from "./team-inventory";
 import type { RelayData } from "../relay/service";
 import type { Agents } from "../agents/service";
 import type { RelaySession } from "../relay/session";
-import { useChannelList } from "../relay/react";
+import { useChannelListWithoutPreviews } from "../relay/react";
 import type { Navigation } from "../navigation/controller";
 import type { OpenTarget } from "../navigation/targets";
 import type {
@@ -196,11 +196,19 @@ export function ChannelInventory({
     contributedRows?.settled ?? noPendingPlugins,
     contributedRows?.settled ?? noPendingPlugins,
   );
-  const list = useChannelList(queries.channels);
+  const preferences = useSidebarPreferences(queries.sidebarPreferences);
+  const list = useChannelListWithoutPreviews(
+    queries.channels,
+    Object.values(preferences.data?.sort ?? {}).some(
+      (mode) => mode !== "alpha",
+    ) ||
+      Object.values(preferences.data?.filters ?? {}).some(
+        (mode) => mode === "active",
+      ),
+  );
   const rosterRecovers = useRecoveryOwns(queries, (live) =>
     rosterRecovering(live.roster),
   );
-  const preferences = useSidebarPreferences(queries.sidebarPreferences);
   const sortModesReady =
     pluginsSettled ||
     Object.values(preferences.data?.sort ?? {}).every(

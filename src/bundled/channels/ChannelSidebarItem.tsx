@@ -19,6 +19,7 @@ import {
 } from "../../shared/design-system/ui/Menu";
 import type { ChannelSummary, Profile } from "../../features/relay/contracts";
 import type { RelaySession } from "../../features/relay/session";
+import { useLiveChannelSummary } from "../../features/relay/react";
 import { ClockIcon } from "../../shared/design-system/icons/index";
 import { channelIcon } from "../../features/channels/channel-icon";
 import { ChannelActivityPopover } from "./ChannelActivityPopover";
@@ -385,9 +386,10 @@ function ContributedChannelRow({
     [session, target],
   );
   const unread = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const live = useLiveChannelSummary(session.channels, channel);
   const row = useMemo(
-    () => sidebarRow(channel, sectionKey, unread),
-    [channel, sectionKey, unread],
+    () => sidebarRow(live, sectionKey, unread),
+    [live, sectionKey, unread],
   );
   return (
     <SidebarRowRenderer
